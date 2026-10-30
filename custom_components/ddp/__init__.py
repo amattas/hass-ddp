@@ -75,7 +75,7 @@ def make_strip(
         pixel_count=pixel_count,
         port=port,
         data_type=DataType.RGBW if data_type == DATA_TYPE_RGBW else DataType.RGB,
-        color_order=color_order or DEFAULT_COLOR_ORDER[data_type],  # pyddp defaults to "RGB" even for RGBW
+        color_order=color_order or DEFAULT_COLOR_ORDER[data_type],
         brightness_cap=brightness_cap / 100,
     )
 

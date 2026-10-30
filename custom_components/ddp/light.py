@@ -20,7 +20,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
-from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.restore_state import ExtraStoredData, RestoredExtraData, RestoreEntity
 from pyddp import EffectInfo, EffectRunner, PyDDPError, list_effects
 
 from . import DDPConfigEntry, DDPRuntime, SegmentConfig
@@ -86,11 +86,16 @@ class DDPSegmentLight(LightEntity, RestoreEntity):
         last = await self.async_get_last_state()
         if last is None:
             return
-        brightness = last.attributes.get(ATTR_BRIGHTNESS)
+        # HA blanks an off light's attributes, so the last look comes from extra data when the light was off.
+        extra = await self.async_get_last_extra_data()
+        look: dict[str, Any] = dict(last.attributes) if last.state == STATE_ON else {}
+        if extra is not None:
+            look = extra.as_dict() | {k: v for k, v in look.items() if v is not None}
+        brightness = look.get(ATTR_BRIGHTNESS)
         if isinstance(brightness, int) and 1 <= brightness <= 255:
             self._attr_brightness = brightness
-        self._attr_rgb_color = _rgb(last.attributes.get(ATTR_RGB_COLOR)) or self._attr_rgb_color
-        effect = last.attributes.get(ATTR_EFFECT)
+        self._attr_rgb_color = _rgb(look.get(ATTR_RGB_COLOR)) or self._attr_rgb_color
+        effect = look.get(ATTR_EFFECT)
         self._attr_effect = effect if effect in EFFECTS else EFFECT_OFF
         if last.state != STATE_ON:
             return
@@ -102,9 +107,21 @@ class DDPSegmentLight(LightEntity, RestoreEntity):
             return
         self._attr_is_on = True
 
+    @property
+    def extra_restore_state_data(self) -> ExtraStoredData:
+        """The last look, kept while off so a bare turn_on after a restart brings it back."""
+        return RestoredExtraData(
+            {
+                ATTR_BRIGHTNESS: self._attr_brightness,
+                ATTR_RGB_COLOR: list(self._attr_rgb_color or DEFAULT_RGB),
+                ATTR_EFFECT: self._attr_effect,
+            }
+        )
+
     async def async_will_remove_from_hass(self) -> None:
         """Stop this segment's runner; leave the pixels as they are."""
-        await self._runtime.stop_runner(self._config.key)
+        async with self._lock:  # a turn_on in flight must not store a runner after this
+            await self._runtime.stop_runner(self._config.key)
         await super().async_will_remove_from_hass()
 
     async def async_turn_on(self, **kwargs: Any) -> None:

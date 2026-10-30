@@ -25,7 +25,11 @@ from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant, State
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from pyddp import DDPSendError, Strip, process_frame
-from pytest_homeassistant_custom_component.common import MockConfigEntry, mock_restore_cache
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    mock_restore_cache,
+    mock_restore_cache_with_extra_data,
+)
 
 from .conftest import Listener
 
@@ -161,6 +165,38 @@ async def test_restore_resends_last_state(
         STATE_ON,
         "rainbow",
         (255, 0, 0),
+    )
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_restored_off_light_turns_on_with_last_look(
+    hass: HomeAssistant, udp_listener: Listener, entry_factory: Callable[..., MockConfigEntry]
+) -> None:
+    # An off light's state attributes are all None, so the last look survives only in extra restore data.
+    off = {ATTR_BRIGHTNESS: None, ATTR_RGB_COLOR: None, ATTR_EFFECT: None}
+    mock_restore_cache_with_extra_data(
+        hass,
+        [
+            (State(OUT1, STATE_OFF, off), {"brightness": 100, "rgb_color": [0, 255, 0], "effect": EFFECT_OFF}),
+            (State(OUT2, STATE_OFF, off), {"brightness": 200, "rgb_color": [255, 0, 0], "effect": "chase"}),
+        ],
+    )
+    entry = entry_factory()
+    await _setup(hass, entry)
+    await udp_listener.settle()
+    assert udp_listener.packets == []
+
+    await hass.services.async_call(LIGHT_DOMAIN, SERVICE_TURN_ON, {ATTR_ENTITY_ID: [OUT1, OUT2]}, blocking=True)
+
+    packet = await udp_listener.wait_for(lambda p: p.offset == 0)
+    assert packet.data == process_frame(bytes((0, 255, 0)) * 80, entry.runtime_data.sender.strip, brightness=100 / 255)
+    assert entry.runtime_data.runners["output2"].running
+    out2 = hass.states.get(OUT2)
+    assert out2 is not None
+    assert (out2.attributes[ATTR_BRIGHTNESS], out2.attributes[ATTR_RGB_COLOR], out2.attributes[ATTR_EFFECT]) == (
+        200,
+        (255, 0, 0),
+        "chase",
     )
     assert await hass.config_entries.async_unload(entry.entry_id)
 
