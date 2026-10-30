@@ -111,6 +111,7 @@ class FakeController:
     )
     requests: list[tuple[str, str, bytes]] = field(default_factory=list)
     offline: bool = False
+    page_delay: float = 0.0  # seconds a page read takes to arrive, its content fixed when the request came in
     port: int = 0
 
     def select(self, effect: str) -> None:
@@ -149,6 +150,7 @@ class FakeController:
                 reply = b"OK"
             elif method == "GET" and path in self.pages:
                 reply = self.pages[path].encode()
+                await asyncio.sleep(self.page_delay)
             else:
                 writer.write(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n")
                 return

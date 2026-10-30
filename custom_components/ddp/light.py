@@ -270,6 +270,7 @@ class NDBScenesLight(LightEntity, RestoreEntity):
         self._attr_device_info = device
         self._attr_is_on = False
         self._last_effect: str | None = None  # last effect other than "Off", seen or commanded
+        self._lock = asyncio.Lock()  # a poll and a command never overlap, so a stale read cannot undo a command
 
     async def async_added_to_hass(self) -> None:
         """Remember the last scene for a bare turn_on. Never commands the controller: its own state is the truth."""
@@ -284,6 +285,11 @@ class NDBScenesLight(LightEntity, RestoreEntity):
         return RestoredExtraData({ATTR_LAST_EFFECT: self._last_effect})
 
     async def async_update(self) -> None:
+        async with self._lock:
+            await self._refresh()
+
+    async def _refresh(self) -> None:
+        """Read the controller's state into the entity. Caller holds the lock."""
         try:
             state = await self._controller.state()
         except (ControllerError, DDPQueryError) as err:
@@ -315,38 +321,41 @@ class NDBScenesLight(LightEntity, RestoreEntity):
                 translation_placeholders={"effect": str(effect), "effects": ", ".join(effects)},
             )
         brightness: int | None = kwargs.get(ATTR_BRIGHTNESS)
-        await self._hand_back()
-        try:
+        async with self._lock:
+            await self._hand_back()
+            try:
+                if brightness is not None:
+                    await self._controller.set_intensity(_to_intensity(brightness))
+                await self._controller.set_effect(effect)
+            except PyDDPError as err:
+                raise self._controller_error(err) from err
             if brightness is not None:
-                await self._controller.set_intensity(_to_intensity(brightness))
-            await self._controller.set_effect(effect)
-        except PyDDPError as err:
-            raise self._controller_error(err) from err
-        if brightness is not None:
-            self._attr_brightness = _to_brightness(_to_intensity(brightness))
-        self._attr_is_on, self._attr_effect, self._last_effect = True, effect, effect
+                self._attr_brightness = _to_brightness(_to_intensity(brightness))
+            self._attr_is_on, self._attr_effect, self._last_effect = True, effect, effect
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Fully dark: blank any DDP segment that is on, then select the controller's "Off"."""
-        for light in self._runtime.segment_lights:
-            if light.is_on:
-                await light.async_turn_off()
-        try:
-            await self._controller.set_effect(CONTROLLER_OFF)
-        except PyDDPError as err:
-            raise self._controller_error(err) from err
-        self._attr_is_on, self._attr_effect = False, None
+        async with self._lock:
+            for light in self._runtime.segment_lights:
+                if light.is_on:
+                    await light.async_turn_off()
+            try:
+                await self._controller.set_effect(CONTROLLER_OFF)
+            except PyDDPError as err:
+                raise self._controller_error(err) from err
+            self._attr_is_on, self._attr_effect = False, None
         self.async_write_ha_state()
 
     async def async_recall_preset(self, preset: int) -> None:
         """Recall stored show ``preset`` (1-20), then read back what the controller now runs."""
-        await self._hand_back()
-        try:
-            await self._controller.recall_preset(preset - 1)
-        except PyDDPError as err:
-            raise self._controller_error(err) from err
-        await self.async_update()
+        async with self._lock:
+            await self._hand_back()
+            try:
+                await self._controller.recall_preset(preset - 1)
+            except PyDDPError as err:
+                raise self._controller_error(err) from err
+            await self._refresh()
         self.async_write_ha_state()
 
     async def _hand_back(self) -> None:

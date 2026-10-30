@@ -227,6 +227,25 @@ async def test_scene_takes_the_pixels_back_from_ddp(
     assert udp_listener.packets == []
 
 
+@pytest.mark.parametrize("service", [SERVICE_TURN_OFF, SERVICE_TURN_ON])
+async def test_poll_in_flight_cannot_undo_a_command(
+    hass: HomeAssistant, fake_controller: FakeController, ndb_entry: MockConfigEntry, service: str
+) -> None:
+    # Live, a scheduled turn_off landed while the 30 s poll was reading the old page; the stale read won.
+    data = {ATTR_EFFECT: "Snow"} if service == SERVICE_TURN_ON else {}
+    fake_controller.page_delay = 0.2
+    poll = hass.async_create_task(async_update_entity(hass, SCENES))
+    await asyncio.sleep(0.05)
+    fake_controller.page_delay = 0.0
+    await _call(hass, service, SCENES, **data)
+    await poll
+    await hass.async_block_till_done()
+
+    state = _state(hass, SCENES)
+    expected = (STATE_OFF, None) if service == SERVICE_TURN_OFF else (STATE_ON, "Snow")
+    assert (state.state, state.attributes.get(ATTR_EFFECT)) == expected
+
+
 async def test_controller_down_at_setup_recovers_on_poll(
     hass: HomeAssistant,
     caplog: pytest.LogCaptureFixture,
