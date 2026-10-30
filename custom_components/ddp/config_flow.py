@@ -198,6 +198,7 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
                 return self.async_update_reload_and_abort(
                     entry,
                     unique_id=host,
+                    title=host if entry.title == entry.data[CONF_HOST] else entry.title,
                     data_updates={CONF_HOST: host, CONF_CONTROLLER_TYPE: user_input[CONF_CONTROLLER_TYPE]},
                 )
         host = user_input[CONF_HOST] if user_input is not None else entry.data[CONF_HOST]

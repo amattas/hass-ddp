@@ -269,7 +269,7 @@ class ScenesLight(CoordinatorEntity[DDPScenesCoordinator], DDPEntity, LightEntit
     def _publish(self, effect: str | None, intensity: int | None = None) -> None:
         """Publish a commanded state as the coordinator's data, keeping the effect list and unchanged intensity."""
         known = self.coordinator.data
-        self.coordinator.async_set_updated_data(
+        self.coordinator.publish(
             SceneState(
                 effect,
                 intensity if intensity is not None else (known.intensity if known else None),

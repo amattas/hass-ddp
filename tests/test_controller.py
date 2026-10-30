@@ -310,6 +310,20 @@ async def test_controller_down_at_setup_recovers_on_poll(
         EFFECTS,
     )
     assert any("recovered" in r.getMessage() for r in caplog.records)  # logged once when it is back
+
+    # A command that succeeds after a failed poll logs the same recovery as a successful poll would.
+    fake_controller.offline = True
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=93))
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert _state(hass, SCENES).state == STATE_UNAVAILABLE
+    caplog.clear()
+    scenes = entry.runtime_data.scenes
+    assert scenes is not None and scenes.data is not None
+    scenes.publish(scenes.data)
+    assert _state(hass, SCENES).state == STATE_ON
+    assert sum("recovered" in r.getMessage() for r in caplog.records) == 1
+    scenes.publish(scenes.data)  # already up: no second message
+    assert sum("recovered" in r.getMessage() for r in caplog.records) == 1
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 

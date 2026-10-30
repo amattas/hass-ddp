@@ -52,7 +52,7 @@
     },
     "abort": {
       "already_configured": "This controller is already configured.",
-      "reconfigure_successful": "The controller type was updated."
+      "reconfigure_successful": "Re-configuration was successful"
     }
   },
   "options": {

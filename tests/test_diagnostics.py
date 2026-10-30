@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 
 import pytest
@@ -10,6 +11,8 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.components.diagnostics import get_diagnostics_for_config_entry
 from pytest_homeassistant_custom_component.typing import ClientSessionGenerator
+
+from custom_components.ddp.diagnostics import redact_controller_document
 
 from .conftest import FakeController
 
@@ -47,12 +50,27 @@ async def test_diagnostics_redacts_identifying_data(
         status, config = controller["status"]["status"], controller["config"]["config"]
         assert status["mac"] == config["ssid"] == config["ip"] == config["gw"] == REDACTED
         assert status["mod"] == "NDBPRO"
+        assert status["name"] == REDACTED  # user-set, may be a house name
     elif variant == "generic":
         assert diagnostics["scenes"] is None
         assert diagnostics["controller"] is None
     else:
         assert diagnostics["scenes"]["available"] is False
-        assert "error" in diagnostics["controller"]
+        assert diagnostics["controller"] == {"error": "ControllerError"}
+        serialized = json.dumps(diagnostics)
+        assert "127.0.0.1" not in serialized
+        assert str(fake_controller.port) not in serialized
     assert "5c:01:3b" not in str(diagnostics)
     assert "SkyDevices" not in str(diagnostics)
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+def test_controller_documents_are_allowlisted() -> None:
+    document = {
+        "config": {"proto": 0, "newfield": "x", "pass": "s", "ports": [{"p": 0, "l": 80, "label": "Garage"}]},
+        "status": {"mod": "NDBPRO", "name": "Smith house", "vin": "24.27"},
+    }
+    assert redact_controller_document(document) == {
+        "config": {"proto": 0, "newfield": REDACTED, "pass": REDACTED, "ports": [{"p": 0, "l": 80, "label": REDACTED}]},
+        "status": {"mod": "NDBPRO", "name": REDACTED, "vin": "24.27"},
+    }

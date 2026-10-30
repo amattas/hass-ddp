@@ -68,11 +68,11 @@ rules:
       The flow queries the controller for its layout and opens (never sends on) a UDP socket. DDP is
       unacknowledged, so the socket is the most that can be verified; the README says so.
   test-before-setup:
-    status: done
+    status: todo
     comment: |
-      Setup raises ConfigEntryNotReady when the socket will not open and ConfigEntryError for an unknown controller
-      type. The Scenes light's HTTP read is deliberately not a gate: the DDP lights do not depend on the web UI, so a
-      silent UI leaves only the Scenes light unavailable until a poll reaches it.
+      Setup only opens a UDP socket (ConfigEntryNotReady if it fails) and rejects an unknown controller type
+      (ConfigEntryError). DDP over UDP has no reachability signal, and the vendor HTTP read is not a gate by design:
+      the DDP lights load even when the controller's web UI is slow, and only the Scenes light waits for a poll.
   unique-config-entry:
     status: done
     comment: The unique ID is the host; adding or reconfiguring to a host that is already configured aborts.
@@ -115,7 +115,7 @@ rules:
   test-coverage:
     status: done
     comment: |
-      100% line coverage; scripts/check_coverage.py fails the gate when any module is under 95%. Tests use a real
+      100% line coverage (line, not branch); scripts/check_coverage.py fails the gate when any module is under 95%. Tests use a real
       loopback UDP listener and a loopback fake of the NDB-Pro web UI.
 
   # Gold
@@ -175,7 +175,7 @@ rules:
       and stored with the entry (Output 1, All), which is device data rather than a fixed string.
   exception-translations:
     status: done
-    comment: Every raised exception uses a translation_key from strings.json (tests/test_translations.py checks).
+    comment: Every raised exception uses a translation_key from strings.json (tests/test_metadata.py checks).
   icon-translations:
     status: done
     comment: icons.json has the Scenes light and the recall_preset action; segment lights use the default light icon.

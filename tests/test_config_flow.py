@@ -280,6 +280,7 @@ async def test_reconfigure_changes_controller_type_and_reloads(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+@pytest.mark.parametrize("title", [HOST, "Roofline"], ids=["title-is-host", "custom-title"])
 @pytest.mark.parametrize(
     ("other_entry", "socket_fails", "result_type", "reason_or_error"),
     [
@@ -293,6 +294,7 @@ async def test_reconfigure_changes_host_and_keeps_the_device(
     hass: HomeAssistant,
     flow_controller: FakeController,
     entry_factory: Callable[..., MockConfigEntry],
+    title: str,
     other_entry: bool,
     socket_fails: bool,
     result_type: FlowResultType,
@@ -301,6 +303,7 @@ async def test_reconfigure_changes_host_and_keeps_the_device(
     socket_allow_hosts(["127.0.0.1", "127.0.0.2"])  # the new host is a second loopback address
     flow_controller.offline = False
     entry = entry_factory(controller=flow_controller)
+    hass.config_entries.async_update_entry(entry, title=title)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     registry = dr.async_get(hass)
@@ -325,6 +328,7 @@ async def test_reconfigure_changes_host_and_keeps_the_device(
         moved = reason_or_error == "reconfigure_successful"
         assert entry.data["host"] == ("127.0.0.2" if moved else HOST)
         assert entry.unique_id == ("127.0.0.2" if moved else HOST)
+        assert entry.title == ("127.0.0.2" if moved and title == HOST else title)  # follows only an untouched title
         assert (registry.async_get_device_by_identifier((DOMAIN, "127.0.0.2"), entry.entry_id) is not None) == moved
         if moved:
             assert registry.async_get_device_by_identifier((DOMAIN, "127.0.0.2"), entry.entry_id).id == device.id  # type: ignore[union-attr]

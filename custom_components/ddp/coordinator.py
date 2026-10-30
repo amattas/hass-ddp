@@ -61,9 +61,15 @@ class DDPScenesCoordinator(DataUpdateCoordinator[SceneState]):
             ) from err
         return SceneState(state.effect, state.intensity, tuple(state.effects))
 
+    def publish(self, data: SceneState) -> None:
+        """Set the data from a command; if the last poll had failed, log the recovery a successful poll would."""
+        if not self.last_update_success:
+            _LOGGER.info("Fetching %s data recovered", self.name)
+        self.async_set_updated_data(data)
+
     async def async_read_after_command(self) -> None:
         """Publish what the controller runs now; a failed read marks the light unavailable. Caller holds ``lock``."""
         try:
-            self.async_set_updated_data(await self.read())
+            self.publish(await self.read())
         except UpdateFailed as err:
             self.async_set_update_error(err)
