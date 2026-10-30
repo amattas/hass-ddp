@@ -170,9 +170,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
 
 async def async_migrate_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
     """1 -> 2: entries gain a controller type; a discovered NDB-Pro keeps its Scenes light, the rest are Generic."""
-    if entry.version > CONFIG_VERSION:
-        return False
-    if entry.version == 1:
+    if entry.version == 1:  # a newer version is refused by Home Assistant before this runs
         hass.config_entries.async_update_entry(
             entry, data={**entry.data, CONF_CONTROLLER_TYPE: type_for_model(entry.data.get(CONF_MODEL))}, version=2
         )
@@ -180,11 +178,8 @@ async def async_migrate_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> boo
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
-    """Stop every runner and close the socket. Never blanks the lights, so a reload doesn't flash the house."""
+    """Close the socket once the lights are gone. Never blanks the lights, so a reload doesn't flash the house."""
     unloaded = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unloaded:
-        runtime = entry.runtime_data
-        for key in list(runtime.runners):
-            await runtime.stop_runner(key)
-        await runtime.sender.close()
+        await entry.runtime_data.sender.close()  # the light entities stopped their runners as they were removed
     return unloaded

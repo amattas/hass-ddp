@@ -30,6 +30,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pyddp import DDPSendError
+from pyminleon import ControllerError
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
@@ -38,6 +39,7 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.ddp import DDPRuntime
 from custom_components.ddp.const import DOMAIN
+from custom_components.ddp.controller import fetch_layout
 
 from .conftest import FakeController, Listener
 
@@ -366,3 +368,17 @@ async def test_errors(
     if segment_fails:
         assert fake_controller.commands() == [_control('{"fx":"Off"}')]
     assert _state(hass, OUT1).state == out1_after
+
+
+async def test_recall_preset_read_back_failure_marks_the_light_unavailable(
+    hass: HomeAssistant, ndb_entry: MockConfigEntry
+) -> None:
+    # The preset was recalled; only the read that follows fails. The action succeeds and the light says it is unsure.
+    with patch.object(ndb_entry.runtime_data.controller, "state", side_effect=ControllerError("gone")):
+        await _recall_preset(hass)
+    assert _state(hass, SCENES).state == STATE_UNAVAILABLE
+
+
+async def test_http_layout_of_a_silent_controller_is_none(fake_controller: FakeController) -> None:
+    fake_controller.offline = True
+    assert await fetch_layout("ndbpro", "127.0.0.1", fake_controller.port) is None

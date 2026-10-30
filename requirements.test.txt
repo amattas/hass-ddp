@@ -5,3 +5,4 @@ pytest-homeassistant-custom-component==0.13.375
 black==26.10.1
 mypy==2.4.1
 ruff==0.17.3
+pytest-cov==7.1.0

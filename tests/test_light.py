@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from contextlib import nullcontext
 from typing import Any
 from unittest.mock import patch
 
@@ -259,3 +260,27 @@ async def test_setup_retries_when_socket_will_not_open(
     with patch("custom_components.ddp.DDPSender.open", side_effect=DDPSendError("no route")):
         await hass.config_entries.async_setup(entry.entry_id)
     assert entry.state is ConfigEntryState.SETUP_RETRY
+
+
+@pytest.mark.parametrize("send_fails", [False, True], ids=["malformed-color", "send-fails"])
+async def test_restore_tolerates_bad_data(
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+    entry_factory: Callable[..., MockConfigEntry],
+    send_fails: bool,
+) -> None:
+    color = [255, 0, 0] if send_fails else [1, 2]  # two components: not an RGB color
+    mock_restore_cache(hass, [State(OUT1, STATE_ON, {ATTR_BRIGHTNESS: 100, ATTR_RGB_COLOR: color})])
+    entry = entry_factory()
+    with (
+        patch("custom_components.ddp.DDPSender.fill", side_effect=DDPSendError("boom")) if send_fails else nullcontext()
+    ):
+        await _setup(hass, entry)
+
+    state = hass.states.get(OUT1)
+    assert state is not None
+    assert state.state == (STATE_OFF if send_fails else STATE_ON)  # a light that cannot be restored stays off
+    assert ("Could not restore" in caplog.text) == send_fails
+    if not send_fails:
+        assert state.attributes[ATTR_RGB_COLOR] == (255, 255, 255)  # the default, not the malformed color
+    assert await hass.config_entries.async_unload(entry.entry_id)
