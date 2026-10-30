@@ -1,0 +1,73 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Add a DDP pixel controller",
+        "description": "Enter the controller's address. Home Assistant asks the controller for its output layout; if it doesn't answer, you'll enter the pixel count yourself. DDP has no acknowledgement, so setup can only check that a socket opens. Nothing is sent to the lights.",
+        "data": {
+          "host": "Host"
+        },
+        "data_description": {
+          "host": "IP address or hostname of the controller (UDP port 4048)."
+        }
+      },
+      "manual": {
+        "title": "Describe the strip",
+        "description": "The controller did not report a usable layout. One light covering the whole strip will be created.",
+        "data": {
+          "pixel_count": "Pixel count",
+          "data_type": "Pixel type"
+        },
+        "data_description": {
+          "pixel_count": "Total pixels the controller drives.",
+          "data_type": "Channels per pixel."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not open a UDP socket to the controller. Check the host.",
+      "invalid_config": "The host or pixel count is not valid for DDP."
+    },
+    "abort": {
+      "already_configured": "This controller is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "DDP options",
+        "data": {
+          "brightness_cap": "Brightness cap",
+          "color_order": "Color order",
+          "fps": "Effect frame rate",
+          "keepalive": "Keepalive interval"
+        },
+        "data_description": {
+          "brightness_cap": "Maximum output as a percent of full. Every frame is capped, including effects.",
+          "color_order": "Channel order the pixels expect on the wire.",
+          "fps": "Frames per second for animated effects.",
+          "keepalive": "Re-send the current frame this often, in seconds, for controllers that time out. 0 turns it off; otherwise at least 0.5."
+        }
+      }
+    },
+    "error": {
+      "invalid_keepalive": "Use 0 (off) or at least 0.5 seconds."
+    }
+  },
+  "selector": {
+    "data_type": {
+      "options": {
+        "rgb": "RGB",
+        "rgbw": "RGBW"
+      }
+    }
+  },
+  "exceptions": {
+    "send_failed": {
+      "message": "Could not send to {entity}: {error}"
+    },
+    "unknown_effect": {
+      "message": "Unknown effect {effect}. Valid effects: {effects}"
+    }
+  }
+}

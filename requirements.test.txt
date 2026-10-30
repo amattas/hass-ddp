@@ -1,0 +1,6 @@
+homeassistant==2026.10.4
+pyddp @ git+https://github.com/amattas/pyddp.git@1d6b1fbd3820afd7850070ea89d057f6c709a435
+pytest-homeassistant-custom-component==0.13.375
+black==26.10.1
+mypy==2.4.1
+ruff==0.17.3
