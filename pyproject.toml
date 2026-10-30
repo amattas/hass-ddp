@@ -1,0 +1,47 @@
+# Development tooling only. Home Assistant and HACS install the integration from
+# custom_components/ddp (manifest.json carries its version and runtime requirements),
+# so this project packages no modules: `python -m pip install -e ".[dev]"` installs
+# the test, lint and type-check tools that CI (mattas-net/.github python-ci.yml) runs.
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hass-ddp"
+version = "0.0.0"
+description = "Development tooling for the DDP Home Assistant integration."
+requires-python = ">=3.14.2"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    # Keep the aioddp and pyminleon commits identical to manifest.json.
+    "aioddp @ git+https://github.com/amattas/aioddp.git@e7f406ab2239c38fea26bbd3f5baa670342d040f",
+    "homeassistant==2026.10.4",
+    "mypy==2.4.1",
+    "pyminleon @ git+https://github.com/amattas/pyminleon.git@e7e5eeb97b42da67d6525b4e73eacd8b7ac21ad7",
+    "pytest-cov==7.1.0",
+    "pytest-homeassistant-custom-component==0.13.375",
+    "ruff==0.17.2",
+]
+
+[tool.setuptools]
+packages = []
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "--cov=custom_components.ddp --cov-report=term-missing:skip-covered"
+
+[tool.coverage.report]
+fail_under = 95
+
+[tool.mypy]
+python_version = "3.14"
+files = ["custom_components/ddp"]
+strict = true
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true

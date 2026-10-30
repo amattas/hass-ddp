@@ -115,7 +115,7 @@ rules:
   test-coverage:
     status: done
     comment: |
-      100% line coverage (line, not branch); scripts/check_coverage.py fails the gate when any module is under 95%. Tests use a real
+      100% line coverage (line, not branch); pytest fails the gate when total coverage is under 95% (fail_under in pyproject.toml). Tests use a real
       loopback UDP listener and a loopback fake of the NDB-Pro web UI.
 
   # Gold
@@ -203,5 +203,5 @@ rules:
   strict-typing:
     status: done
     comment: |
-      mypy --strict is clean on the integration (mypy.ini) and typed config entries are used throughout; aioddp and
+      mypy --strict is clean on the integration ([tool.mypy] in pyproject.toml) and typed config entries are used throughout; aioddp and
       pyminleon ship py.typed. Listing in core's .strict-typing file does not apply to a custom integration.

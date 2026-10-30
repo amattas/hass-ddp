@@ -275,11 +275,11 @@ logger:
 
 ```bash
 conda activate hass-ddp
-python -m pytest -q --cov=custom_components.ddp --cov-report=json
-python scripts/check_coverage.py   # every module at least 95%
+python -m pip install -e ".[dev]"   # test, lint and type-check tools (pyproject.toml)
+python -m pytest -q                 # coverage gate: fail_under in pyproject.toml
 ruff check .
 ruff format --check .
-mypy
+python -m mypy
 ```
 
 The integration's Integration Quality Scale status, rule by rule, is in `custom_components/ddp/quality_scale.yaml`.

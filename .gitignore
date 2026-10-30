@@ -18,3 +18,9 @@ htmlcov/
 
 # Home Assistant dev config
 config/
+
+# Editable install metadata (pip install -e ".[dev]")
+*.egg-info/
+
+# Zensical build output
+/site/

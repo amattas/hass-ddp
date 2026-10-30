@@ -40,18 +40,18 @@ one registry entry). See `DECISIONS.md`.
 - Setup and unload never send frames; only explicit light calls and state restore do. Setup only reads the controller's
   state; it never commands it, and it never probes (the stored type decides)
 - Effect runners are the only background tasks and must all stop on unload
-- `aioddp` and `pyminleon` are pinned by git commit in `manifest.json` and `requirements.test.txt`; keep them identical
+- `aioddp` and `pyminleon` are pinned by git commit in `manifest.json` and `pyproject.toml` (`dev` extra); keep them identical
 
 ## Development
 
 Conda env `hass-ddp`:
 
 ```bash
-python -m pytest -q --cov=custom_components.ddp --cov-report=json
-python scripts/check_coverage.py   # every module at least 95%
+python -m pip install -e ".[dev]"   # test, lint and type-check tools (pyproject.toml)
+python -m pytest -q                 # coverage gate: fail_under in pyproject.toml
 ruff check .
 ruff format --check .
-mypy
+python -m mypy
 ```
 
 Tests use a real loopback UDP listener (`tests/conftest.py`) and assert DDP bytes, comparing against
