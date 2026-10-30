@@ -322,13 +322,13 @@ class NDBScenesLight(LightEntity, RestoreEntity):
             )
         brightness: int | None = kwargs.get(ATTR_BRIGHTNESS)
         async with self._lock:
-            await self._hand_back()
             try:
                 if brightness is not None:
                     await self._controller.set_intensity(_to_intensity(brightness))
                 await self._controller.set_effect(effect)
             except PyDDPError as err:
                 raise self._controller_error(err) from err
+            await self._hand_back()  # only once the controller took the command, so a failure keeps the DDP look
             if brightness is not None:
                 self._attr_brightness = _to_brightness(_to_intensity(brightness))
             self._attr_is_on, self._attr_effect, self._last_effect = True, effect, effect
@@ -336,25 +336,31 @@ class NDBScenesLight(LightEntity, RestoreEntity):
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Fully dark: blank any DDP segment that is on, then select the controller's "Off"."""
+        segment_error: HomeAssistantError | None = None
         async with self._lock:
             for light in self._runtime.segment_lights:
                 if light.is_on:
-                    await light.async_turn_off()
+                    try:
+                        await light.async_turn_off()
+                    except HomeAssistantError as err:  # keep going: the controller's "Off" still darkens the rest
+                        segment_error = segment_error or err
             try:
                 await self._controller.set_effect(CONTROLLER_OFF)
             except PyDDPError as err:
                 raise self._controller_error(err) from err
             self._attr_is_on, self._attr_effect = False, None
         self.async_write_ha_state()
+        if segment_error is not None:
+            raise segment_error
 
     async def async_recall_preset(self, preset: int) -> None:
         """Recall stored show ``preset`` (1-20), then read back what the controller now runs."""
         async with self._lock:
-            await self._hand_back()
             try:
                 await self._controller.recall_preset(preset - 1)
             except PyDDPError as err:
                 raise self._controller_error(err) from err
+            await self._hand_back()
             await self._refresh()
         self.async_write_ha_state()
 
@@ -362,7 +368,8 @@ class NDBScenesLight(LightEntity, RestoreEntity):
         """Turn every segment light off without sending, and stop keepalive, so DDP stops overriding the controller."""
         for light in self._runtime.segment_lights:
             await light.async_hand_back()
-        self._runtime.sender.release()
+        # A segment turned on mid-way (an HA scene applies lights concurrently) keeps its keepalive.
+        self._runtime.release_if_idle()
 
     def _controller_error(self, err: PyDDPError) -> HomeAssistantError:
         return HomeAssistantError(

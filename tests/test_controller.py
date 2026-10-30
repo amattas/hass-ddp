@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import timedelta
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 from homeassistant.components.light import (
@@ -28,12 +30,14 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_component import async_update_entity
 from homeassistant.util import dt as dt_util
+from pyddp import DDPSendError
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     async_fire_time_changed,
     mock_restore_cache_with_extra_data,
 )
 
+from custom_components.ddp import DDPRuntime
 from custom_components.ddp.const import DOMAIN
 
 from .conftest import FakeController, Listener
@@ -227,6 +231,27 @@ async def test_scene_takes_the_pixels_back_from_ddp(
     assert udp_listener.packets == []
 
 
+async def test_segment_turned_on_during_hand_back_keeps_its_keepalive(
+    hass: HomeAssistant, udp_listener: Listener, ndb_entry: MockConfigEntry
+) -> None:
+    # An HA scene holding both lights applies them concurrently, so OUT1 can turn on while the hand-back is
+    # stopping OUT2's runner (after it already handed OUT1 back). Force exactly that interleaving.
+    await _call(hass, SERVICE_TURN_ON, OUT2, effect="chase")
+    stop_runner = DDPRuntime.stop_runner
+
+    async def stop_then_turn_on_out1(self: DDPRuntime, key: str) -> None:
+        await stop_runner(self, key)
+        if key == "output2":
+            await _call(hass, SERVICE_TURN_ON, OUT1, rgb_color=(0, 255, 0))
+
+    with patch.object(DDPRuntime, "stop_runner", stop_then_turn_on_out1):
+        await _call(hass, SERVICE_TURN_ON, SCENES, effect="Show1")
+
+    assert _state(hass, OUT1).state == STATE_ON
+    udp_listener.packets.clear()
+    await udp_listener.wait_for(lambda p: p.offset == 0 and len(p.data) == FULL_STRIP, timeout=2.5)
+
+
 @pytest.mark.parametrize("service", [SERVICE_TURN_OFF, SERVICE_TURN_ON])
 async def test_poll_in_flight_cannot_undo_a_command(
     hass: HomeAssistant, fake_controller: FakeController, ndb_entry: MockConfigEntry, service: str
@@ -292,15 +317,18 @@ async def _recall_on_segment(hass: HomeAssistant) -> None:
 
 
 @pytest.mark.parametrize(
-    ("action", "offline", "error"),
+    ("action", "offline", "segment_fails", "error", "out1_after"),
     [
-        (_strobe, False, ServiceValidationError),
-        (_recall_on_segment, False, ServiceValidationError),
-        (_turn_on_scene, True, HomeAssistantError),
-        (_off, True, HomeAssistantError),
-        (_recall_preset, True, HomeAssistantError),
+        (_strobe, False, False, ServiceValidationError, STATE_ON),
+        (_recall_on_segment, False, False, ServiceValidationError, STATE_ON),
+        # A controller that never took the command must not cost the DDP look.
+        (_turn_on_scene, True, False, HomeAssistantError, STATE_ON),
+        (_recall_preset, True, False, HomeAssistantError, STATE_ON),
+        (_off, True, False, HomeAssistantError, STATE_OFF),
+        # A segment that cannot be blanked must not stop the controller's "Off".
+        (_off, False, True, HomeAssistantError, STATE_ON),
     ],
-    ids=["unknown-effect", "recall-on-segment", "turn_on-down", "turn_off-down", "recall-down"],
+    ids=["unknown-effect", "recall-on-segment", "turn_on-down", "recall-down", "turn_off-down", "segment-send-fails"],
 )
 async def test_errors(
     hass: HomeAssistant,
@@ -308,13 +336,26 @@ async def test_errors(
     ndb_entry: MockConfigEntry,
     action: Callable[[HomeAssistant], Awaitable[None]],
     offline: bool,
+    segment_fails: bool,
     error: type[Exception],
+    out1_after: str,
 ) -> None:
+    await _call(hass, SERVICE_TURN_ON, OUT1, rgb_color=(0, 255, 0))
     fake_controller.requests.clear()
     fake_controller.offline = offline
-    with pytest.raises(error) as raised:
+    with (
+        (
+            patch.object(ndb_entry.runtime_data.sender, "off", side_effect=DDPSendError("boom"))
+            if segment_fails
+            else contextlib.nullcontext()
+        ),
+        pytest.raises(error) as raised,
+    ):
         await action(hass)
     if error is ServiceValidationError:
         assert fake_controller.requests == []
     else:
         assert not isinstance(raised.value, ServiceValidationError)
+    if segment_fails:
+        assert fake_controller.commands() == [_control('{"fx":"Off"}')]
+    assert _state(hass, OUT1).state == out1_after
