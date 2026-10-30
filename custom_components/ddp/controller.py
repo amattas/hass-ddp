@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Final, Protocol
 
+from homeassistant.exceptions import ConfigEntryError
 from pyddp import ControllerLayout, PyDDPError, parse_config
 from pyminleon import MinleonError, NDBController, identify
 
@@ -103,8 +104,15 @@ def type_for_model(model: str | None) -> str:
 
 
 def create_controller(type_key: str, host: str, http_port: int = DEFAULT_HTTP_PORT) -> Controller | None:
-    """The controller client for a stored type; ``None`` for Generic. Opens no connection."""
-    factory = CONTROLLER_TYPES[type_key].factory
+    """The controller client for a stored type; ``None`` for Generic. Opens no connection.
+
+    ``ConfigEntryError`` for a type this release doesn't know (e.g. the entry was written by a newer one).
+    """
+    if (controller_type := CONTROLLER_TYPES.get(type_key)) is None:
+        raise ConfigEntryError(
+            f"Unknown controller type {type_key!r}; reconfigure the entry or upgrade the integration"
+        )
+    factory = controller_type.factory
     return factory(host, http_port) if factory is not None else None
 
 
@@ -120,5 +128,6 @@ async def detect(host: str, http_port: int = DEFAULT_HTTP_PORT) -> str:
 
 async def fetch_layout(type_key: str, host: str, http_port: int = DEFAULT_HTTP_PORT) -> ControllerLayout | None:
     """The layout via the type's vendor API, or ``None`` if the type has none or it didn't answer."""
-    fetcher = CONTROLLER_TYPES[type_key].fetch_layout
+    controller_type = CONTROLLER_TYPES.get(type_key)
+    fetcher = controller_type.fetch_layout if controller_type is not None else None
     return await fetcher(host, http_port) if fetcher is not None else None

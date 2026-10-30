@@ -171,7 +171,7 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
             errors["base"] = error
         return self.async_show_form(
             step_id="controller",
-            data_schema=_controller_schema(self._detected),
+            data_schema=_controller_schema(self._controller_type if user_input is not None else self._detected),
             description_placeholders={CONTROLLER_PLACEHOLDER: CONTROLLER_TYPES[self._detected].label},
             errors=errors,
         )

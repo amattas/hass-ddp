@@ -183,7 +183,8 @@ async def test_socket_check_errors(hass: HomeAssistant, discovered: bool, pixel_
     layout = parse_config(NDB_CONFIG, host=HOST, source="ddp", status=NDB_STATUS) if discovered else None
     with patch(OPEN, side_effect=DDPSendError("no route")):
         result = await _enter_host(hass, layout)
-        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        # Detection finds Generic here; the user picks NDB-Pro and the re-shown form must keep that choice.
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {"controller_type": "ndbpro"})
         if not discovered:
             result = await hass.config_entries.flow.async_configure(
                 result["flow_id"], {"pixel_count": pixel_count, "data_type": "rgb"}
@@ -191,6 +192,8 @@ async def test_socket_check_errors(hass: HomeAssistant, discovered: bool, pixel_
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == ("controller" if discovered else "manual")
     assert result["errors"] == {"base": error}
+    if discovered:
+        assert _default_type(result) == "ndbpro"
 
 
 async def test_duplicate_host_aborts(hass: HomeAssistant) -> None:
