@@ -110,7 +110,7 @@ None in v1. Everything goes through standard `light.turn_on` / `light.turn_off` 
 - `custom_components/quality_scale.yaml` tracking Bronze rules, target Bronze for 0.1.0
 - `hacs.json` (`homeassistant` minimum set to current stable at scaffold time, `render_readme: true`)
 - `tests/` with `conftest.py`, one test module per area
-- ruff in CI; black and mypy aligned with aioddp's config rather than hass-dmp's older pre-commit set
+- ruff (lint and format) and mypy in CI, aligned with aioddp's config rather than hass-dmp's older pre-commit set
 - Docs: Zensical + mike at `https://amattas.github.io/hass-ddp/` with `docs/guide/installation.md`, `controller-configuration.md`, `features.md`
 - GitHub: `ci.yml`, `docs.yml`, `hassfest.yaml`, `release.yml` manual-only, `dependabot.yml`
 - `CLAUDE.md` and `AGENTS.md` at the root pointing at aioddp for anything protocol-related

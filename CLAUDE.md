@@ -50,7 +50,7 @@ Conda env `hass-ddp`:
 python -m pytest -q --cov=custom_components.ddp --cov-report=json
 python scripts/check_coverage.py   # every module at least 95%
 ruff check .
-black --check .
+ruff format --check .
 mypy
 ```
 

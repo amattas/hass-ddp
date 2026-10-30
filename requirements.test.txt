@@ -1,8 +1,7 @@
 homeassistant==2026.10.4
-aioddp @ git+https://github.com/amattas/aioddp.git@e7f406ab2239c38fea26bbd3f5baa670342d040f
-pyminleon @ git+https://github.com/amattas/pyminleon.git@e7e5eeb97b42da67d6525b4e73eacd8b7ac21ad7
+aioddp@git+https://github.com/amattas/aioddp.git@e7f406ab2239c38fea26bbd3f5baa670342d040f
+pyminleon@git+https://github.com/amattas/pyminleon.git@e7e5eeb97b42da67d6525b4e73eacd8b7ac21ad7
 pytest-homeassistant-custom-component==0.13.375
-black==26.10.1
 mypy==2.4.1
-ruff==0.17.3
+ruff==0.17.2
 pytest-cov==7.1.0
