@@ -8,9 +8,10 @@
   "documentation": "https://github.com/amattas/hass-ddp",
   "integration_type": "device",
   "iot_class": "assumed_state",
+  "issue_tracker": "https://github.com/amattas/hass-ddp/issues",
   "requirements": [
-    "aioddp @ git+https://github.com/amattas/aioddp.git@e7f406ab2239c38fea26bbd3f5baa670342d040f",
-    "pyminleon @ git+https://github.com/amattas/pyminleon.git@e7e5eeb97b42da67d6525b4e73eacd8b7ac21ad7"
+    "aioddp@git+https://github.com/amattas/aioddp.git@e7f406ab2239c38fea26bbd3f5baa670342d040f",
+    "pyminleon@git+https://github.com/amattas/pyminleon.git@e7e5eeb97b42da67d6525b4e73eacd8b7ac21ad7"
   ],
   "version": "0.1.0"
 }

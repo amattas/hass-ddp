@@ -1,0 +1,53 @@
+# Checks: lint, format, type-check, test (python-ci.yml) and hassfest + HACS
+# validation (hacs-ci.yml) from mattas-net/.github. Runs on push to main,
+# nightly (hassfest tracks the Home Assistant dev branch), on manual dispatch,
+# and on pull requests once the `approve` job is approved.
+# The Release workflow requires a successful run of this workflow on main HEAD.
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * *"
+
+concurrency:
+  group: checks-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  approve:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    environment: approval
+    steps:
+      - run: echo "Checks approved by ${GITHUB_TRIGGERING_ACTOR}"
+
+  python:
+    needs: approve
+    # Runs when approve passed or was skipped (push/dispatch/schedule); a rejected approval stops it.
+    if: always() && needs.approve.result != 'failure' && needs.approve.result != 'cancelled'
+    uses: mattas-net/.github/.github/workflows/python-ci.yml@main
+    permissions:
+      contents: read
+    with:
+      python-versions: '["3.14"]' # homeassistant 2026.10.4 requires Python >=3.14.2
+      install: python -m pip install --quiet -r requirements.test.txt
+      typecheck: python -m mypy
+      test: python -m pytest -q --cov=custom_components.ddp --cov-report=json
+      extra-checks: python scripts/check_coverage.py
+      build: false
+      audit: "off"
+      codeql: false # enable CodeQL default setup on the repository instead
+
+  hacs:
+    needs: approve
+    if: always() && needs.approve.result != 'failure' && needs.approve.result != 'cancelled'
+    uses: mattas-net/.github/.github/workflows/hacs-ci.yml@main
+    permissions:
+      contents: read

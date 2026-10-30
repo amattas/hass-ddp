@@ -1,0 +1,26 @@
+# Release: bump "version" in custom_components/ddp/manifest.json, merge to main,
+# then Actions -> Release -> enter that version (bare semver, e.g. 0.1.0).
+# Tags main and creates the GitHub release (HACS installs from releases).
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release (bare semver, e.g. 1.4.2)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    uses: mattas-net/.github/.github/workflows/create-release.yml@main
+    permissions:
+      contents: write
+      actions: read
+    with:
+      version: ${{ inputs.version }}
+      manifest: custom_components/ddp/manifest.json
+      require-workflow: Checks

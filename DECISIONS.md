@@ -15,3 +15,7 @@
 - The `pyddp` name on PyPI belongs to an unrelated 2015 Meteor DDP client; `aioddp` is free and follows the asyncio naming convention (aiohttp, aiohue).
 - The exception base class is now `DDPError` (was `PyDDPError`); the other exception names are unchanged.
 - The GitHub repo is renamed to amattas/aioddp; the dependency pin is now `aioddp @ git+https://github.com/amattas/aioddp.git@<sha>`.
+
+## 2026-10-30: shared CI, ruff, and requirement pins
+
+- `aioddp` and `pyminleon` stay pinned by git commit (`pkg@git+https://...@<sha>`, no spaces: hassfest rejects requirements containing a space) until their first PyPI releases, then switch to `==` PyPI pins in `manifest.json` and `requirements.test.txt`.
