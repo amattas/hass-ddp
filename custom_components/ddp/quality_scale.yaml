@@ -1,0 +1,207 @@
+# Integration Quality Scale status. Rules that cannot be done inside this repository are `todo`, not `exempt`.
+rules:
+  # Bronze
+  action-setup:
+    status: done
+    comment: ddp.recall_preset is registered in async_setup as a platform entity service (light domain).
+  appropriate-polling:
+    status: done
+    comment: |
+      Only the Scenes light polls, every 30 s, through its coordinator (one local HTTP read). The interval is a
+      constant, not a config field. Segment lights never poll: DDP has no read path.
+  brands:
+    status: todo
+    comment: |
+      No brand images exist yet. Home Assistant 2026.10 serves brand images shipped inside a custom integration from
+      custom_components/ddp/brand/ (icon.png, logo.png); that needs image assets, which are not created here. A
+      home-assistant/brands pull request is only for core integrations.
+  common-modules:
+    status: done
+    comment: coordinator.py holds DDPScenesCoordinator and entity.py the DDPEntity base.
+  config-flow-test-coverage:
+    status: done
+    comment: config_flow.py is at 100% line coverage (user, controller, manual, reconfigure, options, error paths).
+  config-flow:
+    status: done
+    comment: Every field has a label and a data_description. There are no credentials, so nothing goes in a secrets field.
+  dependency-transparency:
+    status: todo
+    comment: |
+      pyddp and pyminleon are installed from pinned git commits, not exact PyPI versions. Publishing them (from public
+      CI, with tagged releases) is out of scope here; the pyddp name on PyPI belongs to an unrelated project.
+  docs-actions:
+    status: done
+    comment: README documents ddp.recall_preset and the light actions it supports (Actions).
+  docs-conditions:
+    status: exempt
+    comment: The integration provides no conditions.
+  docs-high-level-description:
+    status: done
+    comment: README introduction.
+  docs-installation-instructions:
+    status: done
+    comment: README Installation (HACS and manual, with prerequisites).
+  docs-removal-instructions:
+    status: done
+    comment: README Removal.
+  docs-triggers:
+    status: exempt
+    comment: The integration provides no triggers.
+  entity-event-setup:
+    status: exempt
+    comment: |
+      No entity subscribes to events. The Scenes light listens to its coordinator, whose listener CoordinatorEntity
+      removes itself.
+  entity-unique-id:
+    status: done
+    comment: Unique IDs are <config entry id>_<segment key>, or <config entry id>_controller for the Scenes light.
+  has-entity-name:
+    status: done
+    comment: |
+      DDPEntity sets _attr_has_entity_name; segment lights are named after their output, the Scenes light is "Scenes".
+  runtime-data:
+    status: done
+    comment: DDPConfigEntry = ConfigEntry[DDPRuntime], stored in entry.runtime_data.
+  test-before-configure:
+    status: done
+    comment: |
+      The flow queries the controller for its layout and opens (never sends on) a UDP socket. DDP is
+      unacknowledged, so the socket is the most that can be verified; the README says so.
+  test-before-setup:
+    status: done
+    comment: |
+      Setup raises ConfigEntryNotReady when the socket will not open and ConfigEntryError for an unknown controller
+      type. The Scenes light's HTTP read is deliberately not a gate: the DDP lights do not depend on the web UI, so a
+      silent UI leaves only the Scenes light unavailable until a poll reaches it.
+  unique-config-entry:
+    status: done
+    comment: The unique ID is the host; adding or reconfiguring to a host that is already configured aborts.
+
+  # Silver
+  action-exceptions:
+    status: done
+    comment: |
+      Failed sends and controller errors raise HomeAssistantError; unknown effects and recall_preset on a non-Scenes
+      light raise ServiceValidationError.
+  config-entry-unloading:
+    status: done
+    comment: Unload removes the lights (which stop their effect runners) and closes the socket without blanking.
+  docs-configuration-parameters:
+    status: done
+    comment: README Options table.
+  docs-installation-parameters:
+    status: done
+    comment: README Setup field table.
+  entity-unavailable:
+    status: done
+    comment: |
+      The Scenes light is a CoordinatorEntity and becomes unavailable when the controller does not answer. Segment
+      lights stay available on purpose: DDP is send-only with no reachability signal, their state is assumed, and a
+      failed send raises an error in the action instead.
+  integration-owner:
+    status: done
+    comment: manifest.json lists @amattas as code owner.
+  log-when-unavailable:
+    status: done
+    comment: The coordinator logs once when the controller stops answering and once when it is back (tested).
+  parallel-updates:
+    status: done
+    comment: |
+      light.py sets PARALLEL_UPDATES = 0: segment sends are independent local UDP writes and the Scenes light
+      serializes its own commands and polls with a lock.
+  reauthentication-flow:
+    status: exempt
+    comment: DDP and the controller's web UI use no authentication.
+  test-coverage:
+    status: done
+    comment: |
+      100% line coverage; scripts/check_coverage.py fails the gate when any module is under 95%. Tests use a real
+      loopback UDP listener and a loopback fake of the NDB-Pro web UI.
+
+  # Gold
+  devices:
+    status: done
+    comment: |
+      One device per entry (identifier: host) with manufacturer, model, and firmware when the controller reports them.
+  diagnostics:
+    status: done
+    comment: Entry, sender counters, scenes state, and the controller's raw documents with host, IPs, MAC, and SSID redacted.
+  discovery-update-info:
+    status: todo
+    comment: Depends on discovery, which does not exist yet.
+  discovery:
+    status: todo
+    comment: |
+      DDP has no discovery protocol. The NDB-Pro's MAC is in an Espressif OUI, so a DHCP matcher on the OUI alone would
+      match unrelated devices; a usable matcher (DHCP hostname, mDNS, or SSDP) needs the controller's announcements
+      captured, which has not been done.
+  docs-data-update:
+    status: done
+    comment: README Data updates.
+  docs-examples:
+    status: done
+    comment: README Examples (scheduled scenes, preset automation, Home Assistant scene).
+  docs-known-limitations:
+    status: done
+    comment: README Known limitations.
+  docs-supported-devices:
+    status: done
+    comment: README Supported devices.
+  docs-supported-functions:
+    status: done
+    comment: README Supported functions.
+  docs-troubleshooting:
+    status: done
+    comment: README Troubleshooting.
+  docs-use-cases:
+    status: done
+    comment: README Use cases.
+  dynamic-devices:
+    status: exempt
+    comment: Each entry is one fixed controller; its outputs are read when the entry is added.
+  entity-category:
+    status: exempt
+    comment: Every entity is a primary light; there are no config or diagnostic entities.
+  entity-device-class:
+    status: exempt
+    comment: The light platform has no device classes.
+  entity-disabled-by-default:
+    status: exempt
+    comment: Every entity is a primary light that users want enabled.
+  entity-translations:
+    status: done
+    comment: |
+      The Scenes light is named by translation. Segment lights carry the output label read from the controller's layout
+      and stored with the entry (Output 1, All), which is device data rather than a fixed string.
+  exception-translations:
+    status: done
+    comment: Every raised exception uses a translation_key from strings.json (tests/test_translations.py checks).
+  icon-translations:
+    status: done
+    comment: icons.json has the Scenes light and the recall_preset action; segment lights use the default light icon.
+  reconfiguration-flow:
+    status: done
+    comment: Reconfigure changes the host (moving the device identifier with it) and the controller type.
+  repair-issues:
+    status: exempt
+    comment: |
+      No user-fixable condition is detected: an unreachable controller is transient and surfaces as an unavailable
+      entity, and the layout is not re-read after setup.
+  stale-devices:
+    status: exempt
+    comment: Each entry is one fixed controller device that goes away with the entry.
+
+  # Platinum
+  async-dependency:
+    status: done
+    comment: pyddp and pyminleon are asyncio libraries; nothing runs in the executor.
+  inject-websession:
+    status: todo
+    comment: |
+      pyminleon makes HTTP requests with its own stdlib asyncio client and does not accept a Home Assistant session.
+      Changing it is a pyminleon change, out of scope here.
+  strict-typing:
+    status: done
+    comment: |
+      mypy --strict is clean on the integration (mypy.ini) and typed config entries are used throughout; pyddp and
+      pyminleon ship py.typed. Listing in core's .strict-typing file does not apply to a custom integration.

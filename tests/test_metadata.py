@@ -1,4 +1,4 @@
-"""hassfest-style sanity: every translation key the code uses exists, and the translation files agree."""
+"""hassfest-style sanity: translation keys, icons, services, and the quality scale file agree with the code."""
 
 from __future__ import annotations
 
@@ -68,3 +68,11 @@ def test_icons_and_services_line_up() -> None:
         assert set(entities) <= set(strings["entity"][platform])
     for service, spec in services_yaml.items():
         assert set(spec["fields"]) == set(strings["services"][service]["fields"])
+
+
+def test_quality_scale_is_well_formed() -> None:
+    rules = yaml.safe_load((PACKAGE / "quality_scale.yaml").read_text())["rules"]
+    assert len(rules) == 54
+    for name, rule in rules.items():
+        assert rule["status"] in {"done", "exempt", "todo"}, name
+        assert rule.get("comment"), name  # every status is explained
