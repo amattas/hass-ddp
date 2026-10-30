@@ -8,6 +8,7 @@ import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.ddp.const import DOMAIN
@@ -89,3 +90,9 @@ async def test_unknown_controller_type_fails_setup_cleanly(hass: HomeAssistant, 
     assert entry.state is ConfigEntryState.SETUP_ERROR
     assert "from-the-future" in (entry.reason or "")
     assert await fetch_layout("from-the-future", "127.0.0.1") is None
+
+
+async def test_action_is_registered_by_async_setup_without_an_entry(hass: HomeAssistant) -> None:
+    """The action exists once the integration is set up, whether or not any entry is loaded."""
+    assert await async_setup_component(hass, DOMAIN, {})
+    assert hass.services.has_service(DOMAIN, "recall_preset")

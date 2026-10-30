@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Final, Protocol
+from typing import Any, Final, Protocol
 
 from homeassistant.exceptions import ConfigEntryError
 from pyddp import ControllerLayout, PyDDPError, parse_config
@@ -56,6 +56,8 @@ class Controller(Protocol):
     async def set_effect(self, name: str) -> None: ...
     async def set_intensity(self, percent: int) -> None: ...
     async def recall_preset(self, slot: int) -> None: ...
+    async def config(self) -> dict[str, Any]: ...  # raw documents, for diagnostics
+    async def status(self) -> dict[str, Any]: ...
 
 
 type ControllerFactory = Callable[[str, int], Controller]
