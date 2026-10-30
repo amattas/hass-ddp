@@ -9,10 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import timedelta
 from typing import Any
 
-import probatio
 from homeassistant.components.light import LightEntity
 from homeassistant.components.light.const import (
     ATTR_BRIGHTNESS,
@@ -23,24 +21,25 @@ from homeassistant.components.light.const import (
     LightEntityFeature,
 )
 from homeassistant.components.light.const import DOMAIN as LIGHT_DOMAIN
-from homeassistant.const import CONF_HOST, STATE_ON
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.const import STATE_ON
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity import Entity
-from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback, async_get_current_platform
+from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoredExtraData, RestoreEntity
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from pyddp import EffectInfo, EffectRunner, PyDDPError, list_effects
 
 from . import DDPConfigEntry, DDPRuntime, SegmentConfig
-from .const import CONF_FIRMWARE, CONF_MANUFACTURER, CONF_MODEL, DOMAIN, SOLID_EFFECT
-from .controller import CONTROLLER_ERRORS, Controller, ControllerState
+from .const import DOMAIN, SOLID_EFFECT
+from .controller import CONTROLLER_ERRORS
+from .coordinator import DDPScenesCoordinator, SceneState
+from .entity import DDPEntity
 
 _LOGGER = logging.getLogger(__name__)
 
-PARALLEL_UPDATES = 0  # sends are local UDP writes; the one polled entity per entry is the Scenes light
-SCAN_INTERVAL = timedelta(seconds=30)  # Scenes light polls the controller; segment lights never poll
+# No cap: segment sends are independent local UDP writes, and the Scenes light serializes its own commands and polls.
+PARALLEL_UPDATES = 0
 
 DEFAULT_BRIGHTNESS = 255
 DEFAULT_RGB: tuple[int, int, int] = (255, 255, 255)
@@ -48,9 +47,6 @@ DEFAULT_RGB: tuple[int, int, int] = (255, 255, 255)
 EFFECTS: dict[str, EffectInfo] = {info.name: info for info in list_effects() if info.name != SOLID_EFFECT}
 
 CONTROLLER_OFF = "Off"  # the controller's built-in effect that blanks the lights; the Scenes light's off, not an effect
-SERVICE_RECALL_PRESET = "recall_preset"
-ATTR_PRESET = "preset"
-PRESET_COUNT = 20
 ATTR_LAST_EFFECT = "last_effect"
 SCENES_KEY = "controller"  # unique-ID suffix; unchanged so entities from before controller types survive
 
@@ -58,41 +54,17 @@ SCENES_KEY = "controller"  # unique-ID suffix; unchanged so entities from before
 async def async_setup_entry(
     hass: HomeAssistant, entry: DDPConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
-    """One light per configured segment."""
-    device = DeviceInfo(
-        identifiers={(DOMAIN, entry.data[CONF_HOST])},
-        name=entry.title,
-        manufacturer=entry.data.get(CONF_MANUFACTURER),
-        model=entry.data.get(CONF_MODEL),
-        sw_version=entry.data.get(CONF_FIRMWARE),
-    )
+    """One light per configured segment, plus the Scenes light for a vendor controller type."""
     runtime = entry.runtime_data
-    runtime.segment_lights = [DDPSegmentLight(entry, segment, device) for segment in runtime.segments]
+    runtime.segment_lights = [DDPSegmentLight(entry, segment) for segment in runtime.segments]
     async_add_entities(runtime.segment_lights)
-    scenes_id = f"{entry.entry_id}_{SCENES_KEY}"
-    if runtime.controller is None:
+    if runtime.scenes is None:
         # Switched to Generic DDP: drop the Scenes entity the previous type registered.
         registry = er.async_get(hass)
-        if stale := registry.async_get_entity_id(LIGHT_DOMAIN, DOMAIN, scenes_id):
+        if stale := registry.async_get_entity_id(LIGHT_DOMAIN, DOMAIN, f"{entry.entry_id}_{SCENES_KEY}"):
             registry.async_remove(stale)
         return
-    # First read at setup; if the controller doesn't answer, the light starts unavailable and the poll retries.
-    async_add_entities([ScenesLight(entry, runtime.controller, device)], update_before_add=True)
-    async_get_current_platform().async_register_entity_service(
-        SERVICE_RECALL_PRESET,
-        {probatio.Required(ATTR_PRESET): probatio.All(probatio.Coerce(int), probatio.Range(min=1, max=PRESET_COUNT))},
-        _async_recall_preset,
-    )
-
-
-async def _async_recall_preset(entity: Entity, call: ServiceCall) -> None:
-    if not isinstance(entity, ScenesLight):
-        raise ServiceValidationError(
-            translation_domain=DOMAIN,
-            translation_key="not_a_controller",
-            translation_placeholders={"entity": entity.entity_id},
-        )
-    await entity.async_recall_preset(call.data[ATTR_PRESET])
+    async_add_entities([ScenesLight(entry, runtime.scenes)])
 
 
 def _rgb(value: object) -> tuple[int, int, int] | None:
@@ -101,10 +73,9 @@ def _rgb(value: object) -> tuple[int, int, int] | None:
     return None
 
 
-class DDPSegmentLight(LightEntity, RestoreEntity):
+class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
     """A segment of the strip. DDP is send-only, so HA's state is the truth."""
 
-    _attr_has_entity_name = True
     _attr_should_poll = False
     _attr_assumed_state = True
     _attr_color_mode = ColorMode.RGB
@@ -112,13 +83,12 @@ class DDPSegmentLight(LightEntity, RestoreEntity):
     _attr_supported_features = LightEntityFeature.EFFECT
     _attr_effect_list = [EFFECT_OFF, *EFFECTS]
 
-    def __init__(self, entry: DDPConfigEntry, config: SegmentConfig, device: DeviceInfo) -> None:
+    def __init__(self, entry: DDPConfigEntry, config: SegmentConfig) -> None:
+        super().__init__(entry, config.key)
         self._runtime: DDPRuntime = entry.runtime_data
         self._config = config
         self._lock = asyncio.Lock()  # one state change at a time, so runners never double-start
-        self._attr_name = config.name
-        self._attr_unique_id = f"{entry.entry_id}_{config.key}"
-        self._attr_device_info = device
+        self._attr_name = config.name  # the layout's label for this output, stored with the entry
         self._attr_is_on = False
         self._attr_brightness = DEFAULT_BRIGHTNESS
         self._attr_rgb_color = DEFAULT_RGB
@@ -252,25 +222,22 @@ def _to_intensity(brightness: int) -> int:
     return max(1, round(brightness * 100 / 255))
 
 
-class ScenesLight(LightEntity, RestoreEntity):
+class ScenesLight(CoordinatorEntity[DDPScenesCoordinator], DDPEntity, LightEntity, RestoreEntity):
     """A vendor controller's built-in effects (stored shows included). The controller is the truth; it is polled."""
 
-    _attr_has_entity_name = True
-    _attr_name = "Scenes"
-    _attr_should_poll = True
+    _attr_translation_key = "scenes"
     _attr_color_mode = ColorMode.BRIGHTNESS
     _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
     _attr_supported_features = LightEntityFeature.EFFECT
 
-    def __init__(self, entry: DDPConfigEntry, controller: Controller, device: DeviceInfo) -> None:
+    def __init__(self, entry: DDPConfigEntry, coordinator: DDPScenesCoordinator) -> None:
+        CoordinatorEntity.__init__(self, coordinator)
+        DDPEntity.__init__(self, entry, SCENES_KEY)
         self._runtime: DDPRuntime = entry.runtime_data
-        self._controller = controller
-        self._host: str = entry.data[CONF_HOST]
-        self._attr_unique_id = f"{entry.entry_id}_{SCENES_KEY}"
-        self._attr_device_info = device
         self._attr_is_on = False
         self._last_effect: str | None = None  # last effect other than "Off", seen or commanded
-        self._lock = asyncio.Lock()  # a poll and a command never overlap, so a stale read cannot undo a command
+        if coordinator.data is not None:
+            self._apply(coordinator.data)
 
     async def async_added_to_hass(self) -> None:
         """Remember the last scene for a bare turn_on. Never commands the controller: its own state is the truth."""
@@ -284,25 +251,13 @@ class ScenesLight(LightEntity, RestoreEntity):
     def extra_restore_state_data(self) -> ExtraStoredData:
         return RestoredExtraData({ATTR_LAST_EFFECT: self._last_effect})
 
-    async def async_update(self) -> None:
-        async with self._lock:
-            await self._refresh()
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        if self.coordinator.data is not None:
+            self._apply(self.coordinator.data)
+        super()._handle_coordinator_update()
 
-    async def _refresh(self) -> None:
-        """Read the controller's state into the entity. Caller holds the lock."""
-        try:
-            state = await self._controller.state()
-        except CONTROLLER_ERRORS as err:
-            if self._attr_available:
-                _LOGGER.warning("Controller at %s is unavailable: %s", self._host, err)
-            self._attr_available = False
-            return
-        if not self._attr_available:
-            _LOGGER.info("Controller at %s is available again", self._host)
-        self._attr_available = True
-        self._apply(state)
-
-    def _apply(self, state: ControllerState) -> None:
+    def _apply(self, state: SceneState) -> None:
         self._attr_effect_list = [effect for effect in state.effects if effect != CONTROLLER_OFF]
         if state.intensity is not None:
             self._attr_brightness = _to_brightness(state.intensity)
@@ -310,6 +265,17 @@ class ScenesLight(LightEntity, RestoreEntity):
         self._attr_effect = state.effect if self._attr_is_on else None
         if self._attr_is_on:
             self._last_effect = state.effect
+
+    def _publish(self, effect: str | None, intensity: int | None = None) -> None:
+        """Publish a commanded state as the coordinator's data, keeping the effect list and unchanged intensity."""
+        known = self.coordinator.data
+        self.coordinator.async_set_updated_data(
+            SceneState(
+                effect,
+                intensity if intensity is not None else (known.intensity if known else None),
+                known.effects if known else (),
+            )
+        )
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         effects = self.effect_list or []
@@ -321,23 +287,20 @@ class ScenesLight(LightEntity, RestoreEntity):
                 translation_placeholders={"effect": str(effect), "effects": ", ".join(effects)},
             )
         brightness: int | None = kwargs.get(ATTR_BRIGHTNESS)
-        async with self._lock:
+        async with self.coordinator.lock:
             try:
                 if brightness is not None:
-                    await self._controller.set_intensity(_to_intensity(brightness))
-                await self._controller.set_effect(effect)
+                    await self.coordinator.controller.set_intensity(_to_intensity(brightness))
+                await self.coordinator.controller.set_effect(effect)
             except CONTROLLER_ERRORS as err:
                 raise self._controller_error(err) from err
             await self._hand_back()  # only once the controller took the command, so a failure keeps the DDP look
-            if brightness is not None:
-                self._attr_brightness = _to_brightness(_to_intensity(brightness))
-            self._attr_is_on, self._attr_effect, self._last_effect = True, effect, effect
-        self.async_write_ha_state()
+            self._publish(effect, _to_intensity(brightness) if brightness is not None else None)
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Fully dark: blank any DDP segment that is on, then select the controller's "Off"."""
         segment_error: HomeAssistantError | None = None
-        async with self._lock:
+        async with self.coordinator.lock:
             for light in self._runtime.segment_lights:
                 if light.is_on:
                     try:
@@ -345,24 +308,22 @@ class ScenesLight(LightEntity, RestoreEntity):
                     except HomeAssistantError as err:  # keep going: the controller's "Off" still darkens the rest
                         segment_error = segment_error or err
             try:
-                await self._controller.set_effect(CONTROLLER_OFF)
+                await self.coordinator.controller.set_effect(CONTROLLER_OFF)
             except CONTROLLER_ERRORS as err:
                 raise self._controller_error(err) from err
-            self._attr_is_on, self._attr_effect = False, None
-        self.async_write_ha_state()
+            self._publish(CONTROLLER_OFF)
         if segment_error is not None:
             raise segment_error
 
     async def async_recall_preset(self, preset: int) -> None:
         """Recall stored show ``preset`` (1-20), then read back what the controller now runs."""
-        async with self._lock:
+        async with self.coordinator.lock:
             try:
-                await self._controller.recall_preset(preset - 1)
+                await self.coordinator.controller.recall_preset(preset - 1)
             except CONTROLLER_ERRORS as err:
                 raise self._controller_error(err) from err
             await self._hand_back()
-            await self._refresh()
-        self.async_write_ha_state()
+            await self.coordinator.async_read_after_command()
 
     async def _hand_back(self) -> None:
         """Turn every segment light off without sending, and stop keepalive, so DDP stops overriding the controller."""

@@ -28,7 +28,6 @@ from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON, STATE_UNAVA
 from homeassistant.core import HomeAssistant, State
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.entity_component import async_update_entity
 from homeassistant.util import dt as dt_util
 from pyddp import DDPSendError
 from pytest_homeassistant_custom_component.common import (
@@ -78,6 +77,11 @@ async def _call(hass: HomeAssistant, service: str, entity_id: str, domain: str =
 async def _setup(hass: HomeAssistant, entry: MockConfigEntry) -> None:
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
+
+
+async def _poll(entry: MockConfigEntry) -> None:
+    """One poll of the controller, as the 30 s timer does."""
+    await entry.runtime_data.scenes.async_refresh()
 
 
 def _state(hass: HomeAssistant, entity_id: str) -> State:
@@ -167,7 +171,7 @@ async def test_turn_on_selects_effect_and_intensity(
             effect,
             brightness,
         )
-        await async_update_entity(hass, SCENES)
+        await _poll(entry)
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -184,7 +188,7 @@ async def test_turn_off_selects_off_and_blanks_segments(
     await udp_listener.wait_for(lambda p: p.offset == 0 and p.data == bytes(80 * 3))
     assert _state(hass, SCENES).state == STATE_OFF
     assert _state(hass, OUT1).state == STATE_OFF
-    await async_update_entity(hass, SCENES)
+    await _poll(ndb_entry)
     assert _state(hass, SCENES).state == STATE_OFF  # the controller reports "Off"; it is not an effect
 
 
@@ -260,7 +264,7 @@ async def test_poll_in_flight_cannot_undo_a_command(
     # Live, a scheduled turn_off landed while the 30 s poll was reading the old page; the stale read won.
     data = {ATTR_EFFECT: "Snow"} if service == SERVICE_TURN_ON else {}
     fake_controller.page_delay = 0.2
-    poll = hass.async_create_task(async_update_entity(hass, SCENES))
+    poll = hass.async_create_task(_poll(ndb_entry))
     await asyncio.sleep(0.05)
     fake_controller.page_delay = 0.0
     await _call(hass, service, SCENES, **data)
@@ -292,6 +296,7 @@ async def test_controller_down_at_setup_recovers_on_poll(
         r for r in caplog.records if r.levelno >= logging.WARNING and r.name.startswith("custom_components.ddp")
     ]
     assert len(unavailable) == 1  # logged once, not on every poll
+    caplog.clear()
 
     fake_controller.offline = False
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=62))
@@ -302,6 +307,7 @@ async def test_controller_down_at_setup_recovers_on_poll(
         "Glow",
         EFFECTS,
     )
+    assert any("recovered" in r.getMessage() for r in caplog.records)  # logged once when it is back
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 

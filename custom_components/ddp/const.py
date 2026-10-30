@@ -48,3 +48,7 @@ DEFAULT_COLOR_ORDER: Final = {DATA_TYPE_RGB: "RGB", DATA_TYPE_RGBW: "RGBW"}
 
 # Effect name pyddp renders for a plain solid color; hidden from the effect list (HA's EFFECT_OFF means solid).
 SOLID_EFFECT: Final = "solid"
+
+# Actions
+SERVICE_RECALL_PRESET: Final = "recall_preset"
+PRESET_COUNT: Final = 20

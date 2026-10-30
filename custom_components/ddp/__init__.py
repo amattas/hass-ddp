@@ -5,10 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+import probatio
+from homeassistant.components.light.const import DOMAIN as LIGHT_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import service
+from homeassistant.helpers.typing import ConfigType
 from pyddp import DDP_PORT, DataType, DDPSender, DDPSendError, EffectRunner, Segment, Strip
 
 from .const import (
@@ -28,12 +32,16 @@ from .const import (
     DEFAULT_FPS,
     DEFAULT_HTTP_PORT,
     DEFAULT_KEEPALIVE,
+    DOMAIN,
+    PRESET_COUNT,
     SEGMENT_KEY,
     SEGMENT_LENGTH,
     SEGMENT_NAME,
     SEGMENT_START,
+    SERVICE_RECALL_PRESET,
 )
 from .controller import Controller, create_controller, type_for_model
+from .coordinator import DDPScenesCoordinator
 
 if TYPE_CHECKING:
     from .light import DDPSegmentLight
@@ -55,14 +63,15 @@ class SegmentConfig:
 class DDPRuntime:
     """Per-entry runtime: the one open sender, the segments, and at most one effect runner per segment key.
 
-    ``controller`` drives a vendor controller's built-in effects (``None`` for Generic DDP), and
-    ``segment_lights`` lets the controller light hand the pixels back from DDP.
+    ``controller`` drives a vendor controller's built-in effects (``None`` for Generic DDP) and ``scenes`` polls it,
+    and ``segment_lights`` lets the controller light hand the pixels back from DDP.
     """
 
     sender: DDPSender
     segments: list[SegmentConfig]
     fps: int
     controller: Controller | None = None
+    scenes: DDPScenesCoordinator | None = None
     runners: dict[str, EffectRunner] = field(default_factory=dict)
     segment_lights: list[DDPSegmentLight] = field(default_factory=list)
 
@@ -113,6 +122,21 @@ def build_strip(entry: DDPConfigEntry) -> Strip:
     )
 
 
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Register the integration's action once, so it exists whether or not an entry is loaded."""
+    service.async_register_platform_entity_service(
+        hass,
+        DOMAIN,
+        SERVICE_RECALL_PRESET,
+        entity_domain=LIGHT_DOMAIN,
+        schema={
+            probatio.Required("preset"): probatio.All(probatio.Coerce(int), probatio.Range(min=1, max=PRESET_COUNT))
+        },
+        func="async_recall_preset",
+    )
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
     """Open the sender and forward to the light platform. Sends nothing; lights restore their own state."""
     # Built before the socket opens, so a host it rejects leaks nothing. No probing: the stored type decides.
@@ -124,12 +148,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
     try:
         await sender.open()
     except DDPSendError as err:
-        raise ConfigEntryNotReady(f"Cannot open DDP socket to {entry.data[CONF_HOST]}: {err}") from err
+        raise ConfigEntryNotReady(
+            translation_domain=DOMAIN,
+            translation_key="socket_failed",
+            translation_placeholders={"host": entry.data[CONF_HOST], "error": str(err)},
+        ) from err
     segments = [
         SegmentConfig(s[SEGMENT_KEY], s[SEGMENT_NAME], Segment(s[SEGMENT_KEY], s[SEGMENT_START], s[SEGMENT_LENGTH]))
         for s in entry.data[CONF_SEGMENTS]
     ]
-    entry.runtime_data = DDPRuntime(sender, segments, int(entry.options.get(CONF_FPS, DEFAULT_FPS)), controller)
+    scenes = DDPScenesCoordinator(hass, entry, controller) if controller is not None else None
+    runtime = DDPRuntime(sender, segments, int(entry.options.get(CONF_FPS, DEFAULT_FPS)), controller, scenes)
+    entry.runtime_data = runtime
+    if scenes is not None:
+        # Not a setup gate: the DDP lights don't need the controller's HTTP UI, so a silent one leaves the Scenes
+        # light unavailable until a poll reaches it, instead of failing the entry.
+        await scenes.async_refresh()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 

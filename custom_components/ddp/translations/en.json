@@ -95,6 +95,15 @@
     },
     "not_a_controller": {
       "message": "{entity} is not a controller Scenes light; recall_preset works only on a Scenes light."
+    },
+    "socket_failed": {
+      "message": "Cannot open a DDP socket to {host}: {error}"
+    },
+    "unknown_controller_type": {
+      "message": "Unknown controller type {type}. Reconfigure the entry or upgrade the integration."
+    },
+    "controller_unreachable": {
+      "message": "The controller at {host} did not answer: {error}"
     }
   },
   "services": {
@@ -106,6 +115,13 @@
           "name": "Preset",
           "description": "Stored preset number, 1 to 20."
         }
+      }
+    }
+  },
+  "entity": {
+    "light": {
+      "scenes": {
+        "name": "Scenes"
       }
     }
   }

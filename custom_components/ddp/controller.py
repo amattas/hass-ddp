@@ -15,7 +15,7 @@ from homeassistant.exceptions import ConfigEntryError
 from pyddp import ControllerLayout, PyDDPError, parse_config
 from pyminleon import MinleonError, NDBController, identify
 
-from .const import DEFAULT_HTTP_PORT
+from .const import DEFAULT_HTTP_PORT, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -110,7 +110,9 @@ def create_controller(type_key: str, host: str, http_port: int = DEFAULT_HTTP_PO
     """
     if (controller_type := CONTROLLER_TYPES.get(type_key)) is None:
         raise ConfigEntryError(
-            f"Unknown controller type {type_key!r}; reconfigure the entry or upgrade the integration"
+            translation_domain=DOMAIN,
+            translation_key="unknown_controller_type",
+            translation_placeholders={"type": type_key},
         )
     factory = controller_type.factory
     return factory(host, http_port) if factory is not None else None

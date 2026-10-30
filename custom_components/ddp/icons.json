@@ -1,0 +1,14 @@
+{
+  "entity": {
+    "light": {
+      "scenes": {
+        "default": "mdi:palette"
+      }
+    }
+  },
+  "services": {
+    "recall_preset": {
+      "service": "mdi:playlist-play"
+    }
+  }
+}
