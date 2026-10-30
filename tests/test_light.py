@@ -89,8 +89,9 @@ async def test_solid_on_sends_color_through_pipeline(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_turn_off_blanks_only_that_segment(
-    hass: HomeAssistant, udp_listener: Listener, setup_entry: MockConfigEntry
+@pytest.mark.parametrize("both", [False, True], ids=["one-of-two", "last-one"])
+async def test_turn_off_blanks_segment_and_releases_after_the_last(
+    hass: HomeAssistant, udp_listener: Listener, setup_entry: MockConfigEntry, both: bool
 ) -> None:
     await _turn_on(hass, OUT1, rgb_color=(10, 20, 30))
     await _turn_on(hass, OUT2, rgb_color=(10, 20, 30))
@@ -105,6 +106,20 @@ async def test_turn_off_blanks_only_that_segment(
     assert [(p.offset, p.data, p.push) for p in udp_listener.packets] == [(0, bytes(80 * 3), True)]
     assert hass.states.get(OUT1).state == STATE_OFF  # type: ignore[union-attr]
     assert hass.states.get(OUT2).state == STATE_ON  # type: ignore[union-attr]
+
+    if both:
+        await _turn_off(hass, OUT2)
+        await udp_listener.wait_for(lambda p: p.offset == OUT2_OFFSET and p.data == bytes(42 * 3))
+    udp_listener.packets.clear()
+    # Keepalive is on by default (1 s) and resends the whole strip while any segment is on. Once none is, the
+    # sender is released so the controller's built-in effect can take the pixels back.
+    keepalive = (0, bytes(80 * 3) + process_frame(bytes((10, 20, 30)) * 42, setup_entry.runtime_data.sender.strip))
+    if both:
+        await udp_listener.settle(2.2)
+        assert udp_listener.packets == []
+    else:
+        packet = await udp_listener.wait_for(lambda p: len(p.data) == 122 * 3, timeout=2.5)
+        assert (packet.offset, packet.data) == keepalive
 
 
 async def test_effect_runs_updates_and_stops_on_solid(

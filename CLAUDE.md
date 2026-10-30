@@ -11,14 +11,18 @@ its submodules. If something is missing or wrong in the protocol layer, fix it i
 
 ## Layout
 
-- `__init__.py`: `DDPRuntime` (`entry.runtime_data`): one `Strip`, one open `DDPSender`, segments, fps, runners
+- `__init__.py`: `DDPRuntime` (`entry.runtime_data`): one `Strip`, one open `DDPSender`, segments, fps, runners, and an
+  `NDBController` for entries discovered as model `NDBPRO`
 - `config_flow.py`: host -> `pyddp.discover`, manual fallback; options flow (cap, color order, fps, keepalive)
-- `light.py`: `DDPSegmentLight` (`LightEntity` + `RestoreEntity`), RGB color mode, pyddp effects
+- `light.py`: `DDPSegmentLight` (`LightEntity` + `RestoreEntity`), RGB color mode, pyddp effects; `NDBScenesLight`
+  (NDB-Pro built-in effects over HTTP, polled, `ddp.recall_preset`), which hands the pixels back from DDP by turning
+  segment lights off without sending and calling `DDPSender.release()`
 - Design spec: `docs/superpowers/specs/2026-10-28-hass-ddp-design.md` (this release is a smaller cut of it)
 
 ## Rules
 
-- Setup and unload never send frames; only explicit light calls and state restore do
+- Setup and unload never send frames; only explicit light calls and state restore do. Setup only reads the NDB-Pro's
+  HTTP UI; it never commands it
 - Effect runners are the only background tasks and must all stop on unload
 - `pyddp` is pinned by git commit in `manifest.json` and `requirements.test.txt`; keep them identical
 
@@ -34,4 +38,5 @@ mypy
 ```
 
 Tests use a real loopback UDP listener (`tests/conftest.py`) and assert DDP bytes, comparing against
-`pyddp.process_frame` rather than hardcoded values.
+`pyddp.process_frame` rather than hardcoded values. `fake_controller` is a loopback NDB-Pro HTTP UI serving
+`tests/fixtures/ndbpro/` chunked like the firmware; commands change the pages so polls read them back.

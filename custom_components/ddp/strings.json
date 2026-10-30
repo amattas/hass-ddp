@@ -46,7 +46,7 @@
           "brightness_cap": "Maximum output as a percent of full. Every frame is capped, including effects.",
           "color_order": "Channel order the pixels expect on the wire.",
           "fps": "Frames per second for animated effects.",
-          "keepalive": "Re-send the current frame this often, in seconds, for controllers that time out. 0 turns it off; otherwise at least 0.5."
+          "keepalive": "Re-send the current frame this often, in seconds, so the controller doesn't fall back to its built-in effect (the NDB-Pro does after about 20 s without DDP). 0 turns it off; otherwise at least 0.5."
         }
       }
     },
@@ -68,6 +68,24 @@
     },
     "unknown_effect": {
       "message": "Unknown effect {effect}. Valid effects: {effects}"
+    },
+    "controller_failed": {
+      "message": "Could not command the controller for {entity}: {error}"
+    },
+    "not_a_controller": {
+      "message": "{entity} is not a controller Scenes light; recall_preset works only on an NDB-Pro's Scenes light."
+    }
+  },
+  "services": {
+    "recall_preset": {
+      "name": "Recall preset",
+      "description": "Plays one of the controller's 20 stored show presets (1-10 are Show 1, 11-20 Show 2). DDP segment lights are turned off so the controller's scene shows.",
+      "fields": {
+        "preset": {
+          "name": "Preset",
+          "description": "Stored preset number, 1 to 20."
+        }
+      }
     }
   }
 }

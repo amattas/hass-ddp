@@ -14,6 +14,9 @@ CONF_SEGMENTS: Final = "segments"
 CONF_MANUFACTURER: Final = "manufacturer"
 CONF_MODEL: Final = "model"
 CONF_FIRMWARE: Final = "firmware"
+# Model the NDB-Pro reports in its status document; such entries also get the built-in effects ("Scenes") light.
+MODEL_NDBPRO: Final = "NDBPRO"
+CONF_HTTP_PORT: Final = "http_port"  # test-only, like "port": where the controller's HTTP UI listens
 # Segment dict keys: "key" is the stable pyddp segment name used in unique IDs, "name" is for display.
 SEGMENT_KEY: Final = "key"
 SEGMENT_NAME: Final = "name"
@@ -32,7 +35,8 @@ CONF_KEEPALIVE: Final = "keepalive"  # seconds, 0 = off
 
 DEFAULT_BRIGHTNESS_CAP: Final = 60
 DEFAULT_FPS: Final = 30
-DEFAULT_KEEPALIVE: Final = 0.0
+# On by default: the NDB-Pro falls back to its built-in effect about 20 s after DDP stops, even mid solid color.
+DEFAULT_KEEPALIVE: Final = 1.0
 MIN_KEEPALIVE: Final = 0.5
 MAX_KEEPALIVE: Final = 300.0
 

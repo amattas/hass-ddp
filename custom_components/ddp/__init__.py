@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
-from pyddp import DDP_PORT, DataType, DDPSender, DDPSendError, EffectRunner, Segment, Strip
+from pyddp import DDP_PORT, DataType, DDPSender, DDPSendError, EffectRunner, NDBController, Segment, Strip
 
 from .const import (
     CONF_BRIGHTNESS_CAP,
     CONF_COLOR_ORDER,
     CONF_DATA_TYPE,
     CONF_FPS,
+    CONF_HTTP_PORT,
     CONF_KEEPALIVE,
+    CONF_MODEL,
     CONF_PIXEL_COUNT,
     CONF_SEGMENTS,
     DATA_TYPE_RGBW,
@@ -23,11 +26,15 @@ from .const import (
     DEFAULT_COLOR_ORDER,
     DEFAULT_FPS,
     DEFAULT_KEEPALIVE,
+    MODEL_NDBPRO,
     SEGMENT_KEY,
     SEGMENT_LENGTH,
     SEGMENT_NAME,
     SEGMENT_START,
 )
+
+if TYPE_CHECKING:
+    from .light import DDPSegmentLight
 
 PLATFORMS: list[Platform] = [Platform.LIGHT]
 
@@ -43,12 +50,23 @@ class SegmentConfig:
 
 @dataclass(slots=True)
 class DDPRuntime:
-    """Per-entry runtime: the one open sender, the segments, and at most one effect runner per segment key."""
+    """Per-entry runtime: the one open sender, the segments, and at most one effect runner per segment key.
+
+    ``controller`` drives an NDB-Pro's built-in effects over HTTP (``None`` for any other controller), and
+    ``segment_lights`` lets the controller light hand the pixels back from DDP.
+    """
 
     sender: DDPSender
     segments: list[SegmentConfig]
     fps: int
+    controller: NDBController | None = None
     runners: dict[str, EffectRunner] = field(default_factory=dict)
+    segment_lights: list[DDPSegmentLight] = field(default_factory=list)
+
+    def release_if_idle(self) -> None:
+        """Stop keepalive resends once no segment light is on, so the controller's own effect comes back."""
+        if not any(light.is_on for light in self.segment_lights):
+            self.sender.release()
 
     async def stop_runner(self, key: str) -> None:
         """Stop and forget the runner for ``key``, if any. Never blanks the segment."""
@@ -94,6 +112,9 @@ def build_strip(entry: DDPConfigEntry) -> Strip:
 
 async def async_setup_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
     """Open the sender and forward to the light platform. Sends nothing; lights restore their own state."""
+    controller = None  # built before the socket opens, so a host it rejects leaks nothing
+    if entry.data.get(CONF_MODEL) == MODEL_NDBPRO:
+        controller = NDBController(entry.data[CONF_HOST], port=entry.data.get(CONF_HTTP_PORT, 80))
     keepalive = float(entry.options.get(CONF_KEEPALIVE, DEFAULT_KEEPALIVE))
     sender = DDPSender(build_strip(entry), keepalive_interval=keepalive or None)
     try:
@@ -104,7 +125,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
         SegmentConfig(s[SEGMENT_KEY], s[SEGMENT_NAME], Segment(s[SEGMENT_KEY], s[SEGMENT_START], s[SEGMENT_LENGTH]))
         for s in entry.data[CONF_SEGMENTS]
     ]
-    entry.runtime_data = DDPRuntime(sender, segments, int(entry.options.get(CONF_FPS, DEFAULT_FPS)))
+    entry.runtime_data = DDPRuntime(sender, segments, int(entry.options.get(CONF_FPS, DEFAULT_FPS)), controller)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 

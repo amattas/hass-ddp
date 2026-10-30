@@ -1,0 +1,15 @@
+recall_preset:
+  target:
+    entity:
+      integration: ddp
+      domain: light
+  fields:
+    preset:
+      required: true
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 20
+          step: 1
+          mode: box

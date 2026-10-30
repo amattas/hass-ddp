@@ -1,5 +1,5 @@
 homeassistant==2026.10.4
-pyddp @ git+https://github.com/amattas/pyddp.git@722baea938fa2750ce671236661e0f1ee12c94e1
+pyddp @ git+https://github.com/amattas/pyddp.git@cd9a753c23d2c7a5b23d1f7b617b0b52226fa500
 pytest-homeassistant-custom-component==0.13.375
 black==26.10.1
 mypy==2.4.1
