@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 import probatio
+from aioddp import MAX_FPS, ConfigError, ControllerLayout, DataType, DDPError, DDPSender, DDPSendError, discover
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlowWithReload
 from homeassistant.const import CONF_HOST
 from homeassistant.core import callback
@@ -20,7 +21,6 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
     TextSelector,
 )
-from pyddp import MAX_FPS, ConfigError, ControllerLayout, DataType, DDPSender, DDPSendError, PyDDPError, discover
 
 from . import CONFIG_VERSION, make_strip
 from .const import (
@@ -127,7 +127,7 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
             self._host = host
             try:
                 self._layout = await discover(host)
-            except PyDDPError as err:
+            except DDPError as err:
                 _LOGGER.debug("discovery of %s failed: %s", host, err)
                 self._layout = None
             self._detected = await detect(host, DEFAULT_HTTP_PORT)

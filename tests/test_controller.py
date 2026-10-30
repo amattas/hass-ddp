@@ -11,6 +11,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from aioddp import DDPSendError
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_COLOR_MODE,
@@ -29,7 +30,6 @@ from homeassistant.core import HomeAssistant, State
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
-from pyddp import DDPSendError
 from pyminleon import ControllerError
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -229,7 +229,7 @@ async def test_scene_takes_the_pixels_back_from_ddp(
     if command[0] == "GET":  # a recalled preset's effect is unknown until the controller is read again
         assert fake_controller.requests[-2:] == [("GET", "/pfx2.html", b""), ("GET", "/pcolors.html", b"")]
     assert runtime.runners == {}
-    assert [t for t in asyncio.all_tasks() if t.get_name().startswith("pyddp-effect-")] == []
+    assert [t for t in asyncio.all_tasks() if t.get_name().startswith("aioddp-effect-")] == []
     assert _state(hass, OUT1).state == STATE_OFF
     assert _state(hass, OUT2).state == STATE_OFF
     assert _state(hass, SCENES).state == STATE_ON

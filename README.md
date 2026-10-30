@@ -4,7 +4,7 @@ A Home Assistant custom integration that drives DDP (Distributed Display Protoco
 Minleon NDB-Pro, as native light entities. Each controller is one device with one light per output. Every light
 supports on/off, brightness, RGB color, and an effect list, so Home Assistant scenes can capture and replay it.
 
-All protocol code lives in [pyddp](https://github.com/amattas/pyddp), and Minleon NDB-Pro control in
+All protocol code lives in [aioddp](https://github.com/amattas/aioddp), and Minleon NDB-Pro control in
 [pyminleon](https://github.com/amattas/pyminleon); this repository only maps them onto Home Assistant.
 
 ## Supported devices
@@ -15,14 +15,14 @@ All protocol code lives in [pyddp](https://github.com/amattas/pyddp), and Minleo
 | Any other DDP v1 controller (UDP port 4048) | **Generic DDP**: one light per output, or one light for the whole strip. Not tested beyond the DDP spec |
 
 RGB and RGBW pixels are supported. DDP is send-only, so Home Assistant cannot read a controller's state back over DDP;
-see Known limitations. See [pyddp's compatibility notes](https://github.com/amattas/pyddp/blob/main/docs/compatibility.md)
+see Known limitations. See [aioddp's compatibility notes](https://github.com/amattas/aioddp/blob/main/docs/compatibility.md)
 for which controllers have been exercised.
 
 ## Supported functions
 
 | Entity | What it does |
 |---|---|
-| **Output N** light (one per output; **All** for a manually described strip) | On/off, brightness, RGB color, and the pyddp effects. Sends DDP; its state is assumed |
+| **Output N** light (one per output; **All** for a manually described strip) | On/off, brightness, RGB color, and the aioddp effects. Sends DDP; its state is assumed |
 | **Scenes** light (vendor controller types only) | Selects the controller's built-in effects and shows, brightness maps to its intensity. Polled |
 
 Action: `ddp.recall_preset` (NDB-Pro Scenes light only). Home Assistant's `light.turn_on` and `light.turn_off` work on
@@ -32,7 +32,7 @@ every light, and scenes capture the segment lights. The integration provides no 
 
 Prerequisites: Home Assistant 2026.10.0 or later, the controller reachable from Home Assistant over UDP (port 4048) and,
 for the Scenes light, TCP port 80, and `git` available to Home Assistant, because the two libraries are installed from
-pinned git commits (the `pyddp` name on PyPI belongs to an unrelated project).
+pinned git commits (`aioddp` is not yet published to PyPI).
 
 **HACS (custom repository)**
 
@@ -112,7 +112,7 @@ effect (about 20 s on an NDB-Pro). Turn the lights off first if you want them da
 
 ## Effects
 
-The effect list comes from pyddp: `breathe`, `chase`, `twinkle`, `rainbow`, `palette`. The effect `off` means a solid
+The effect list comes from aioddp: `breathe`, `chase`, `twinkle`, `rainbow`, `palette`. The effect `off` means a solid
 color. The light's RGB color drives each effect's main color where it has one (for example the chase color or the
 breathe color); brightness scales the whole effect.
 
@@ -267,7 +267,7 @@ To report a problem, include the downloaded diagnostics and debug logs:
 logger:
   logs:
     custom_components.ddp: debug
-    pyddp: debug
+    aioddp: debug
     pyminleon: debug
 ```
 

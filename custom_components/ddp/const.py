@@ -17,7 +17,7 @@ CONF_FIRMWARE: Final = "firmware"
 CONF_CONTROLLER_TYPE: Final = "controller_type"  # key into controller.CONTROLLER_TYPES; vendor types get a Scenes light
 CONF_HTTP_PORT: Final = "http_port"  # test-only, like "port": where the controller's HTTP UI listens
 DEFAULT_HTTP_PORT: Final = 80
-# Segment dict keys: "key" is the stable pyddp segment name used in unique IDs, "name" is for display.
+# Segment dict keys: "key" is the stable aioddp segment name used in unique IDs, "name" is for display.
 SEGMENT_KEY: Final = "key"
 SEGMENT_NAME: Final = "name"
 SEGMENT_START: Final = "start"
@@ -46,7 +46,7 @@ COLOR_ORDERS: Final = {
 }
 DEFAULT_COLOR_ORDER: Final = {DATA_TYPE_RGB: "RGB", DATA_TYPE_RGBW: "RGBW"}
 
-# Effect name pyddp renders for a plain solid color; hidden from the effect list (HA's EFFECT_OFF means solid).
+# Effect name aioddp renders for a plain solid color; hidden from the effect list (HA's EFFECT_OFF means solid).
 SOLID_EFFECT: Final = "solid"
 
 # Actions

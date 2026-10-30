@@ -1,6 +1,6 @@
 """One light per segment (DDP), plus a "Scenes" light for a vendor controller's built-in effects.
 
-Segment lights: on/off, brightness, RGB color, and pyddp effects, restored and re-sent on startup. The Scenes light
+Segment lights: on/off, brightness, RGB color, and aioddp effects, restored and re-sent on startup. The Scenes light
 selects the controller's built-in effects and stored presets; DDP data overrides those while it flows, so it turns the
 segment lights off (without blanking) and releases the sender before commanding the controller.
 """
@@ -11,6 +11,7 @@ import asyncio
 import logging
 from typing import Any
 
+from aioddp import DDPError, EffectInfo, EffectRunner, list_effects
 from homeassistant.components.light import LightEntity
 from homeassistant.components.light.const import (
     ATTR_BRIGHTNESS,
@@ -28,7 +29,6 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoredExtraData, RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from pyddp import EffectInfo, EffectRunner, PyDDPError, list_effects
 
 from . import DDPConfigEntry, DDPRuntime, SegmentConfig
 from .const import DOMAIN, SOLID_EFFECT
@@ -165,7 +165,7 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
             await self._runtime.stop_runner(self._config.key)
             try:
                 await self._runtime.sender.off(self._config.segment)
-            except PyDDPError as err:
+            except DDPError as err:
                 raise self._send_error(err) from err
             self._attr_is_on = False
             self._runtime.release_if_idle()
@@ -203,10 +203,10 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
             await runner.start()
             runtime.runners[key] = runner
             self._runner_effect = info.name
-        except PyDDPError as err:
+        except DDPError as err:
             raise self._send_error(err) from err
 
-    def _send_error(self, err: PyDDPError) -> HomeAssistantError:
+    def _send_error(self, err: DDPError) -> HomeAssistantError:
         return HomeAssistantError(
             translation_domain=DOMAIN,
             translation_key="send_failed",

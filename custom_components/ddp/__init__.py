@@ -1,4 +1,4 @@
-"""DDP Pixel Controller: one DDP controller as a device with one light per segment. Protocol code lives in pyddp."""
+"""DDP Pixel Controller: one DDP controller as a device with one light per segment. Protocol code lives in aioddp."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import probatio
+from aioddp import DDP_PORT, DataType, DDPSender, DDPSendError, EffectRunner, Segment, Strip
 from homeassistant.components.light.const import DOMAIN as LIGHT_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT, Platform
@@ -13,7 +14,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import service
 from homeassistant.helpers.typing import ConfigType
-from pyddp import DDP_PORT, DataType, DDPSender, DDPSendError, EffectRunner, Segment, Strip
 
 from .const import (
     CONF_BRIGHTNESS_CAP,
@@ -99,7 +99,7 @@ def make_strip(
     color_order: str | None = None,
     brightness_cap: int = DEFAULT_BRIGHTNESS_CAP,
 ) -> Strip:
-    """A pyddp strip from stored values: ``data_type`` is "rgb"/"rgbw", ``brightness_cap`` a percent."""
+    """A aioddp strip from stored values: ``data_type`` is "rgb"/"rgbw", ``brightness_cap`` a percent."""
     return Strip(
         host=host,
         pixel_count=pixel_count,

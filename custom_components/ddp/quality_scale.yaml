@@ -27,8 +27,8 @@ rules:
   dependency-transparency:
     status: todo
     comment: |
-      pyddp and pyminleon are installed from pinned git commits, not exact PyPI versions. Publishing them (from public
-      CI, with tagged releases) is out of scope here; the pyddp name on PyPI belongs to an unrelated project.
+      aioddp and pyminleon are installed from pinned git commits, not exact PyPI versions. Publishing them (from public
+      CI, with tagged releases) is out of scope here; aioddp is not yet published to PyPI.
   docs-actions:
     status: done
     comment: README documents ddp.recall_preset and the light actions it supports (Actions).
@@ -194,7 +194,7 @@ rules:
   # Platinum
   async-dependency:
     status: done
-    comment: pyddp and pyminleon are asyncio libraries; nothing runs in the executor.
+    comment: aioddp and pyminleon are asyncio libraries; nothing runs in the executor.
   inject-websession:
     status: todo
     comment: |
@@ -203,5 +203,5 @@ rules:
   strict-typing:
     status: done
     comment: |
-      mypy --strict is clean on the integration (mypy.ini) and typed config entries are used throughout; pyddp and
+      mypy --strict is clean on the integration (mypy.ini) and typed config entries are used throughout; aioddp and
       pyminleon ship py.typed. Listing in core's .strict-typing file does not apply to a custom integration.

@@ -9,3 +9,9 @@
 - hass-ddp owns the vendor-neutral `Controller` protocol and a config-flow "Controller type" step: detected type
   preselected, "Generic DDP" always offered. Stored in entry data; entries migrated.
 - pyddp changes go on the existing branch `feature/ha-effect-color`; committed locally, pushed only on request.
+
+## 2026-10-30: pyddp renamed to aioddp
+
+- The `pyddp` name on PyPI belongs to an unrelated 2015 Meteor DDP client; `aioddp` is free and follows the asyncio naming convention (aiohttp, aiohue).
+- The exception base class is now `DDPError` (was `PyDDPError`); the other exception names are unchanged.
+- The GitHub repo is renamed to amattas/aioddp; the dependency pin is now `aioddp @ git+https://github.com/amattas/aioddp.git@<sha>`.

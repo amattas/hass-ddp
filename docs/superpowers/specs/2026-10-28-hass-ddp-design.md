@@ -2,11 +2,11 @@
 
 Date: 2026-10-28
 Status: Draft
-Companion: `pyddp/docs/superpowers/specs/2026-10-28-pyddp-design.md`
+Companion: `aioddp/docs/superpowers/specs/2026-10-28-aioddp-design.md`
 
 ## Summary
 
-hass-ddp is a HACS custom integration (`custom_components/ddp`) that turns one DDP pixel controller into one Home Assistant device with one light entity per segment. It depends on pyddp via `manifest.json` and contains no protocol code, the same split as hass-dmp over pydmp.
+hass-ddp is a HACS custom integration (`custom_components/ddp`) that turns one DDP pixel controller into one Home Assistant device with one light entity per segment. It depends on aioddp via `manifest.json` and contains no protocol code, the same split as hass-dmp over pydmp.
 
 First target is a Minleon NDB-Pro on a roofline (roofline segment plus a garage peak segment), with no Minleon-specific code.
 
@@ -35,7 +35,7 @@ First target is a Minleon NDB-Pro on a roofline (roofline segment plus a garage 
   "documentation": "https://amattas.github.io/hass-ddp/",
   "integration_type": "device",
   "iot_class": "assumed_state",
-  "requirements": ["pyddp==0.1.0"],
+  "requirements": ["aioddp==0.1.0"],
   "version": "0.1.0"
 }
 ```
@@ -54,7 +54,7 @@ First target is a Minleon NDB-Pro on a roofline (roofline segment plus a garage 
 - Segments: add, edit, remove (name, start pixel, length, reverse). Default is one segment covering the whole string
 - Brightness cap, percent of full output, default 60
 - Effect fps cap, default 30
-- Gamma on/off (default per pyddp's finding for the controller)
+- Gamma on/off (default per aioddp's finding for the controller)
 - Keepalive interval, off by default
 
 Any options change reloads the entry.
@@ -63,7 +63,7 @@ Any options change reloads the entry.
 
 | Piece | Role |
 |---|---|
-| `DDPRuntime` (`entry.runtime_data`) | Owns one `pyddp.DDPSender`, the strip config, and one `EffectRunner` slot per segment |
+| `DDPRuntime` (`entry.runtime_data`) | Owns one `aioddp.DDPSender`, the strip config, and one `EffectRunner` slot per segment |
 | `DDPSegmentLight` | `LightEntity` + `RestoreEntity` per segment |
 | Device | One per controller; segments are its entities |
 | Diagnostics | Config (host redacted only if asked), segment map, last frame time, packets sent, send errors |
@@ -71,7 +71,7 @@ Any options change reloads the entry.
 ### Light entity
 
 - Color modes: `rgb` and `color_temp` for RGB strips; `rgbw` and `color_temp` for RGBW
-- `effect_list` built from the pyddp effect registry; `None` effect means solid color
+- `effect_list` built from the aioddp effect registry; `None` effect means solid color
 - Supports `transition` for solid color and brightness changes (rendered as a short fade through the runner)
 - `assumed_state = True`, `should_poll = False`
 - Unique ID: `<entry_id>_<segment_name>`; renaming a segment in options keeps the entity if the slug is unchanged
@@ -81,7 +81,7 @@ Any options change reloads the entry.
 - Solid colors send once on change, plus keepalive if enabled
 - Effects run as an `EffectRunner` task, cancelled on any state change, entity removal, or entry unload
 - Turning off sends zeros for that segment's range and stops its runner
-- All sends on the event loop, no executor threads. pyddp's render-time budget is the guarantee that effects don't stall HA
+- All sends on the event loop, no executor threads. aioddp's render-time budget is the guarantee that effects don't stall HA
 - Only one sender per controller. If something else (FPP, xLights) is driving the NDB-Pro, hass-ddp's entities must be off first; this is documented, not detected
 
 ## Lifecycle
@@ -101,8 +101,8 @@ None in v1. Everything goes through standard `light.turn_on` / `light.turn_off` 
 - Options flow: add, edit, remove segment, validation of overlap and range
 - Entity: turn on solid, change color, set effect, turn off, restore after restart
 - Runner: started on effect, cancelled on state change and on unload, no orphaned tasks
-- pyddp sender mocked at the boundary; one integration test against a local UDP listener to assert real bytes
-- `requirements.test.txt` pins pyddp exactly, matching `manifest.json`
+- aioddp sender mocked at the boundary; one integration test against a local UDP listener to assert real bytes
+- `requirements.test.txt` pins aioddp exactly, matching `manifest.json`
 
 ## Repo conventions (mirror hass-dmp)
 
@@ -110,10 +110,10 @@ None in v1. Everything goes through standard `light.turn_on` / `light.turn_off` 
 - `custom_components/quality_scale.yaml` tracking Bronze rules, target Bronze for 0.1.0
 - `hacs.json` (`homeassistant` minimum set to current stable at scaffold time, `render_readme: true`)
 - `tests/` with `conftest.py`, one test module per area
-- ruff in CI; black and mypy aligned with pyddp's config rather than hass-dmp's older pre-commit set
+- ruff in CI; black and mypy aligned with aioddp's config rather than hass-dmp's older pre-commit set
 - Docs: Zensical + mike at `https://amattas.github.io/hass-ddp/` with `docs/guide/installation.md`, `controller-configuration.md`, `features.md`
 - GitHub: `ci.yml`, `docs.yml`, `hassfest.yaml`, `release.yml` manual-only, `dependabot.yml`
-- `CLAUDE.md` and `AGENTS.md` at the root pointing at pyddp for anything protocol-related
+- `CLAUDE.md` and `AGENTS.md` at the root pointing at aioddp for anything protocol-related
 - Apache-2.0 license
 
 ## Milestones

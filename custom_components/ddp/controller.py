@@ -11,8 +11,8 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Protocol
 
+from aioddp import ControllerLayout, DDPError, parse_config
 from homeassistant.exceptions import ConfigEntryError
-from pyddp import ControllerLayout, PyDDPError, parse_config
 from pyminleon import MinleonError, NDBController, identify
 
 from .const import DEFAULT_HTTP_PORT, DOMAIN
@@ -80,7 +80,7 @@ async def _ndbpro_layout(host: str, http_port: int) -> ControllerLayout | None:
     ctl = NDBController(host, port=http_port)
     try:
         return parse_config(await ctl.config(), host=host, source="http", status=await ctl.status())
-    except (*CONTROLLER_ERRORS, PyDDPError) as err:
+    except (*CONTROLLER_ERRORS, DDPError) as err:
         _LOGGER.debug("no HTTP layout from %s: %s", host, err)
         return None
 

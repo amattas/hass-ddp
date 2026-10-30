@@ -9,6 +9,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+from aioddp import DDPSendError, Strip, process_frame
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_EFFECT,
@@ -25,7 +26,6 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant, State
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
-from pyddp import DDPSendError, Strip, process_frame
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
     mock_restore_cache,
@@ -40,7 +40,7 @@ OUT2_OFFSET = 80 * 3
 
 
 def _effect_tasks() -> list[asyncio.Task[Any]]:
-    return [t for t in asyncio.all_tasks() if t.get_name().startswith("pyddp-effect-") and not t.done()]
+    return [t for t in asyncio.all_tasks() if t.get_name().startswith("aioddp-effect-") and not t.done()]
 
 
 async def _turn_on(hass: HomeAssistant, entity_id: str, **data: Any) -> None:
@@ -130,7 +130,7 @@ async def test_effect_runs_updates_and_stops_on_solid(
     await _turn_on(hass, OUT1, effect="chase", rgb_color=(0, 0, 255), brightness=255)
     runner = runtime.runners["output1"]
     assert runner.running
-    assert [t.get_name() for t in _effect_tasks()] == ["pyddp-effect-chase-output1"]
+    assert [t.get_name() for t in _effect_tasks()] == ["aioddp-effect-chase-output1"]
     await udp_listener.wait_for(lambda p: p.offset == 0)
     assert hass.states.get(OUT1).attributes[ATTR_EFFECT] == "chase"  # type: ignore[union-attr]
 
