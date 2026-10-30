@@ -18,17 +18,24 @@ one registry entry). See `DECISIONS.md`.
 
 ## Layout
 
-- `__init__.py`: `DDPRuntime` (`entry.runtime_data`): one `Strip`, one open `DDPSender`, segments, fps, runners, and the
-  `Controller` built from the entry's stored `controller_type` (`None` for Generic); `async_migrate_entry` (1 -> 2)
+- `__init__.py`: `async_setup` registers the `ddp.recall_preset` entity service; `DDPRuntime` (`entry.runtime_data`):
+  one `Strip`, one open `DDPSender`, segments, fps, runners, the `Controller` built from the entry's stored
+  `controller_type` (`None` for Generic) and its `DDPScenesCoordinator`; `async_migrate_entry` (1 -> 2)
+- `coordinator.py`: `DDPScenesCoordinator` (30 s poll of the controller); `lock` serializes polls and commands, so a
+  stale poll cannot undo a command. `entity.py`: `DDPEntity` base (device info, unique IDs). `diagnostics.py`: redacted entry, sender, and controller documents
 - `controller.py`: controller type registry, `Controller` protocol, `detect`, `create_controller`, `fetch_layout`
 - `config_flow.py`: host -> `pyddp.discover` + `detect` -> controller type step (detected preselected, Generic always
   offered) -> entry, or manual fallback; reconfigure changes the type; options flow (cap, color order, fps, keepalive)
 - `light.py`: `DDPSegmentLight` (`LightEntity` + `RestoreEntity`), RGB color mode, pyddp effects; `ScenesLight`
-  (a vendor controller's built-in effects, polled, `ddp.recall_preset`), which hands the pixels back from DDP by turning
+  (a coordinator entity for a vendor controller's built-in effects, `ddp.recall_preset`), which hands the pixels back from DDP by turning
   segment lights off without sending and calling `DDPSender.release()`
 - Design spec: `docs/superpowers/specs/2026-10-28-hass-ddp-design.md` (this release is a smaller cut of it)
 
 ## Rules
+
+- `quality_scale.yaml` is the honest status of every Integration Quality Scale rule; update it when behaviour changes
+- Every raised `HomeAssistantError`/`ConfigEntryError`/`UpdateFailed` uses a `translation_key` present in `strings.json`
+  and `translations/en.json` (`tests/test_translations.py` checks); keep `icons.json` in step with entities and actions
 
 - Setup and unload never send frames; only explicit light calls and state restore do. Setup only reads the controller's
   state; it never commands it, and it never probes (the stored type decides)
@@ -40,7 +47,8 @@ one registry entry). See `DECISIONS.md`.
 Conda env `hass-ddp`:
 
 ```bash
-python -m pytest -q
+python -m pytest -q --cov=custom_components.ddp --cov-report=json
+python scripts/check_coverage.py   # every module at least 95%
 ruff check .
 black --check .
 mypy
