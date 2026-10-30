@@ -99,7 +99,7 @@ def make_strip(
     color_order: str | None = None,
     brightness_cap: int = DEFAULT_BRIGHTNESS_CAP,
 ) -> Strip:
-    """A aioddp strip from stored values: ``data_type`` is "rgb"/"rgbw", ``brightness_cap`` a percent."""
+    """An aioddp strip from stored values: ``data_type`` is "rgb"/"rgbw", ``brightness_cap`` a percent."""
     return Strip(
         host=host,
         pixel_count=pixel_count,
