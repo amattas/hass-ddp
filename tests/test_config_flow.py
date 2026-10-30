@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import Callable, Iterator
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -11,9 +12,11 @@ from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pyddp import DDPQueryError, DDPSendError, parse_config
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_socket import socket_allow_hosts
 
 from custom_components.ddp.const import DOMAIN
 
@@ -274,4 +277,56 @@ async def test_reconfigure_changes_controller_type_and_reloads(
     assert entry.state is ConfigEntryState.LOADED
     assert (entry.runtime_data.controller is not None) == (target == "ndbpro")
     assert (entity_registry.async_get("light.ndb_pro_scenes") is not None) == (target == "ndbpro")
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize(
+    ("other_entry", "socket_fails", "result_type", "reason_or_error"),
+    [
+        (False, False, FlowResultType.ABORT, "reconfigure_successful"),
+        (True, False, FlowResultType.ABORT, "already_configured"),
+        (False, True, FlowResultType.FORM, "cannot_connect"),
+    ],
+    ids=["moved", "host-taken", "unreachable"],
+)
+async def test_reconfigure_changes_host_and_keeps_the_device(
+    hass: HomeAssistant,
+    flow_controller: FakeController,
+    entry_factory: Callable[..., MockConfigEntry],
+    other_entry: bool,
+    socket_fails: bool,
+    result_type: FlowResultType,
+    reason_or_error: str,
+) -> None:
+    socket_allow_hosts(["127.0.0.1", "127.0.0.2"])  # the new host is a second loopback address
+    flow_controller.offline = False
+    entry = entry_factory(controller=flow_controller)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    registry = dr.async_get(hass)
+    device = registry.async_get_device_by_identifier((DOMAIN, HOST), entry.entry_id)
+    assert device is not None
+    if other_entry:
+        MockConfigEntry(domain=DOMAIN, unique_id="127.0.0.2", data={"host": "127.0.0.2"}).add_to_hass(hass)
+
+    result = await entry.start_reconfigure_flow(hass)
+    with patch(OPEN, side_effect=DDPSendError("no route")) if socket_fails else contextlib.nullcontext():
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"], {"host": " 127.0.0.2 ", "controller_type": "ndbpro"}
+        )
+    await hass.async_block_till_done()
+
+    assert result["type"] is result_type
+    if result_type is FlowResultType.FORM:
+        assert result["errors"] == {"base": reason_or_error}
+        assert entry.data["host"] == HOST
+    else:
+        assert result["reason"] == reason_or_error
+        moved = reason_or_error == "reconfigure_successful"
+        assert entry.data["host"] == ("127.0.0.2" if moved else HOST)
+        assert entry.unique_id == ("127.0.0.2" if moved else HOST)
+        assert (registry.async_get_device_by_identifier((DOMAIN, "127.0.0.2"), entry.entry_id) is not None) == moved
+        if moved:
+            assert registry.async_get_device_by_identifier((DOMAIN, "127.0.0.2"), entry.entry_id).id == device.id  # type: ignore[union-attr]
+            assert registry.async_get_device_by_identifier((DOMAIN, HOST), entry.entry_id) is None
     assert await hass.config_entries.async_unload(entry.entry_id)

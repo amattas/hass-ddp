@@ -9,6 +9,7 @@ import probatio
 from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlowWithReload
 from homeassistant.const import CONF_HOST
 from homeassistant.core import callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.selector import (
     NumberSelector,
     NumberSelectorConfig,
@@ -71,16 +72,15 @@ MANUAL_SCHEMA = probatio.Schema(
 CONTROLLER_PLACEHOLDER = "detected"
 
 
-def _controller_schema(default: str) -> probatio.Schema:
-    """A select of every registered controller type, ``default`` preselected."""
+def _controller_selector() -> SelectSelector:
+    """A select of every registered controller type."""
     options = [SelectOptionDict(value=t.key, label=t.label) for t in CONTROLLER_TYPES.values()]
-    return probatio.Schema(
-        {
-            probatio.Required(CONF_CONTROLLER_TYPE, default=default): SelectSelector(
-                SelectSelectorConfig(options=options, mode=SelectSelectorMode.LIST)
-            )
-        }
-    )
+    return SelectSelector(SelectSelectorConfig(options=options, mode=SelectSelectorMode.LIST))
+
+
+def _controller_schema(default: str) -> probatio.Schema:
+    """The controller type step's schema, ``default`` preselected."""
+    return probatio.Schema({probatio.Required(CONF_CONTROLLER_TYPE, default=default): _controller_selector()})
 
 
 async def _check_socket(host: str, pixel_count: int, data_type: str) -> str | None:
@@ -177,17 +177,43 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Change the controller type later; the entry reloads so the Scenes light appears or goes."""
+        """Change the host or the controller type later; the entry reloads so the Scenes light appears or goes."""
         entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_update_reload_and_abort(
-                entry, data_updates={CONF_CONTROLLER_TYPE: user_input[CONF_CONTROLLER_TYPE]}
-            )
-        detected = await detect(entry.data[CONF_HOST], entry.data.get(CONF_HTTP_PORT, DEFAULT_HTTP_PORT))
+            host = user_input[CONF_HOST].strip()
+            if host != entry.data[CONF_HOST]:
+                await self.async_set_unique_id(host)
+                self._abort_if_unique_id_configured()
+                if not (error := await _check_socket(host, entry.data[CONF_PIXEL_COUNT], entry.data[CONF_DATA_TYPE])):
+                    # Unique IDs of the entities are keyed by the entry, so only the device identity follows the host.
+                    registry = dr.async_get(self.hass)
+                    if device := registry.async_get_device_by_identifier(
+                        (DOMAIN, entry.data[CONF_HOST]), entry.entry_id
+                    ):
+                        registry.async_update_device(device.id, new_identifiers={(DOMAIN, host)})
+                else:
+                    errors["base"] = error
+            if not errors:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    unique_id=host,
+                    data_updates={CONF_HOST: host, CONF_CONTROLLER_TYPE: user_input[CONF_CONTROLLER_TYPE]},
+                )
+        host = user_input[CONF_HOST] if user_input is not None else entry.data[CONF_HOST]
+        chosen = user_input[CONF_CONTROLLER_TYPE] if user_input is not None else entry.data[CONF_CONTROLLER_TYPE]
+        detected = await detect(host, entry.data.get(CONF_HTTP_PORT, DEFAULT_HTTP_PORT))
+        schema = probatio.Schema(
+            {
+                probatio.Required(CONF_HOST, default=host): TextSelector(),
+                probatio.Required(CONF_CONTROLLER_TYPE, default=chosen): _controller_selector(),
+            }
+        )
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=_controller_schema(entry.data[CONF_CONTROLLER_TYPE]),
+            data_schema=schema,
             description_placeholders={CONTROLLER_PLACEHOLDER: CONTROLLER_TYPES[detected].label},
+            errors=errors,
         )
 
     async def async_step_manual(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:

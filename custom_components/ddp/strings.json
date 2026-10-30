@@ -34,12 +34,14 @@
         }
       },
       "reconfigure": {
-        "title": "Controller type",
-        "description": "Detected controller: {detected}. Changing the type adds or removes the Scenes light; the DDP lights are kept.",
+        "title": "Reconfigure the controller",
+        "description": "Detected controller: {detected}. Changing the host keeps the device and its lights. Changing the type adds or removes the Scenes light; the DDP lights are kept.",
         "data": {
+          "host": "Host",
           "controller_type": "Controller type"
         },
         "data_description": {
+          "host": "IP address or hostname of the controller (UDP port 4048).",
           "controller_type": "Generic DDP creates only the per-output DDP lights."
         }
       }
