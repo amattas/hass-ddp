@@ -14,9 +14,9 @@ CONF_SEGMENTS: Final = "segments"
 CONF_MANUFACTURER: Final = "manufacturer"
 CONF_MODEL: Final = "model"
 CONF_FIRMWARE: Final = "firmware"
-# Model the NDB-Pro reports in its status document; such entries also get the built-in effects ("Scenes") light.
-MODEL_NDBPRO: Final = "NDBPRO"
+CONF_CONTROLLER_TYPE: Final = "controller_type"  # key into controller.CONTROLLER_TYPES; vendor types get a Scenes light
 CONF_HTTP_PORT: Final = "http_port"  # test-only, like "port": where the controller's HTTP UI listens
+DEFAULT_HTTP_PORT: Final = 80
 # Segment dict keys: "key" is the stable pyddp segment name used in unique IDs, "name" is for display.
 SEGMENT_KEY: Final = "key"
 SEGMENT_NAME: Final = "name"

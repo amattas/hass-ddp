@@ -3,12 +3,22 @@
     "step": {
       "user": {
         "title": "Add a DDP pixel controller",
-        "description": "Enter the controller's address. Home Assistant asks the controller for its output layout; if it doesn't answer, you'll enter the pixel count yourself. DDP has no acknowledgement, so setup can only check that a socket opens. Nothing is sent to the lights.",
+        "description": "Enter the controller's address. Home Assistant asks the controller for its output layout and checks which kind of controller it is. If it can't tell, you'll enter the pixel count yourself. DDP has no acknowledgement, so setup can only check that a socket opens. Nothing is sent to the lights.",
         "data": {
           "host": "Host"
         },
         "data_description": {
           "host": "IP address or hostname of the controller (UDP port 4048)."
+        }
+      },
+      "controller": {
+        "title": "Controller type",
+        "description": "Detected controller: {detected}. A vendor controller type adds a Scenes light for the controller's built-in effects and presets. Generic DDP creates only the per-output DDP lights.",
+        "data": {
+          "controller_type": "Controller type"
+        },
+        "data_description": {
+          "controller_type": "Choose Generic DDP if the detected type is wrong or you only want the DDP lights."
         }
       },
       "manual": {
@@ -22,6 +32,16 @@
           "pixel_count": "Total pixels the controller drives.",
           "data_type": "Channels per pixel."
         }
+      },
+      "reconfigure": {
+        "title": "Controller type",
+        "description": "Detected controller: {detected}. Changing the type adds or removes the Scenes light; the DDP lights are kept.",
+        "data": {
+          "controller_type": "Controller type"
+        },
+        "data_description": {
+          "controller_type": "Generic DDP creates only the per-output DDP lights."
+        }
       }
     },
     "error": {
@@ -29,7 +49,8 @@
       "invalid_config": "The host or pixel count is not valid for DDP."
     },
     "abort": {
-      "already_configured": "This controller is already configured."
+      "already_configured": "This controller is already configured.",
+      "reconfigure_successful": "The controller type was updated."
     }
   },
   "options": {
@@ -73,7 +94,7 @@
       "message": "Could not command the controller for {entity}: {error}"
     },
     "not_a_controller": {
-      "message": "{entity} is not a controller Scenes light; recall_preset works only on an NDB-Pro's Scenes light."
+      "message": "{entity} is not a controller Scenes light; recall_preset works only on a Scenes light."
     }
   },
   "services": {

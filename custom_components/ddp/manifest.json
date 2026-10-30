@@ -1,11 +1,16 @@
 {
   "domain": "ddp",
   "name": "DDP Pixel Controller",
-  "codeowners": ["@amattas"],
+  "codeowners": [
+    "@amattas"
+  ],
   "config_flow": true,
   "documentation": "https://github.com/amattas/hass-ddp",
   "integration_type": "device",
   "iot_class": "assumed_state",
-  "requirements": ["pyddp @ git+https://github.com/amattas/pyddp.git@cd9a753c23d2c7a5b23d1f7b617b0b52226fa500"],
+  "requirements": [
+    "pyddp @ git+https://github.com/amattas/pyddp.git@10dc2fcfe3ae8951398e5c5dd1a7269afbb1abb3",
+    "pyminleon @ git+https://github.com/amattas/pyminleon.git@e56ebe1b63441536f5a3804cfcd27fbb5edad16a"
+  ],
   "version": "0.1.0"
 }

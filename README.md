@@ -4,7 +4,8 @@ A Home Assistant custom integration that drives DDP (Distributed Display Protoco
 Minleon NDB-Pro, as native light entities. Each controller is one device with one light per output. Every light
 supports on/off, brightness, RGB color, and an effect list, so Home Assistant scenes can capture and replay it.
 
-All protocol code lives in [pyddp](https://github.com/amattas/pyddp); this repository only maps it onto Home Assistant.
+All protocol code lives in [pyddp](https://github.com/amattas/pyddp), and Minleon NDB-Pro control in
+[pyminleon](https://github.com/amattas/pyminleon); this repository only maps them onto Home Assistant.
 
 ## Installation (HACS custom repository)
 
@@ -12,19 +13,33 @@ All protocol code lives in [pyddp](https://github.com/amattas/pyddp); this repos
 2. Add `https://github.com/amattas/hass-ddp` with type **Integration**.
 3. Install **DDP Pixel Controller** and restart Home Assistant.
 
-Home Assistant 2026.10.0 or later is required. pyddp is installed from a pinned git commit (the `pyddp` name on PyPI
+Home Assistant 2026.10.0 or later is required. pyddp and pyminleon are installed from pinned git commits (the `pyddp` name on PyPI
 belongs to an unrelated project).
 
 ## Setup
 
 1. **Settings > Devices & services > Add integration > DDP Pixel Controller.**
 2. Enter the controller's IP address or hostname.
-3. Home Assistant asks the controller for its output layout (DDP query, then its HTTP API). If it answers, one light
-   is created per active output ("Output 1", "Output 2", ...). If not, enter the total pixel count and pixel type
-   (RGB or RGBW) and one light covering the whole strip is created.
+3. Home Assistant asks the controller for its output layout (a DDP query, then the controller's own API if its type
+   is known to serve one) and checks which kind of controller it is.
+4. Pick the **Controller type**. The detected type is preselected; **Generic DDP** is always offered.
+5. If a layout was found, one light is created per active output ("Output 1", "Output 2", ...). If not, enter the total
+   pixel count and pixel type (RGB or RGBW) and one light covering the whole strip is created.
 
 DDP is send-only UDP with no acknowledgement, so setup can only check that a socket opens. Setup never sends a frame,
 and reloading or removing the integration never blanks the lights.
+
+### Controller types
+
+| Type | Lights |
+|---|---|
+| Generic DDP | One DDP light per output. Works with any DDP controller; nothing else is created |
+| Minleon NDB-Pro | The DDP lights, plus the **Scenes** light and the `ddp.recall_preset` service (see below) |
+
+Change the type later with **Reconfigure** on the integration entry; the entry reloads, and choosing Generic DDP removes
+the Scenes light. The stored type decides: nothing probes the controller at startup. Adding another vendor's
+controller means one entry in the controller type registry (`custom_components/ddp/controller.py`) backed by that
+vendor's library.
 
 ### Options
 
@@ -50,7 +65,8 @@ breathe color); brightness scales the whole effect.
 
 ## NDB-Pro built-in scenes
 
-A Minleon NDB-Pro (discovered as model `NDBPRO`) gets one more light on the same device: **Scenes**. It drives the
+A controller of type Minleon NDB-Pro (detected from its status model `NDBPRO`, or chosen by hand) gets one more light
+on the same device: **Scenes**. It drives the
 controller's own built-in effects over its HTTP UI instead of sending DDP. Entity IDs below assume the device is named
 "NDBPRO" (the title discovery gives it unless the controller reports a name), so the lights are
 `light.ndbpro_scenes`, `light.ndbpro_output_1`, and so on; check yours on the device page.

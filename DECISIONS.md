@@ -1,0 +1,11 @@
+# Decisions
+
+## 2026-10-30: controller types and the pyminleon split
+
+- pyddp is DDP-only: no HTTP client, no vendor code. `discover()` is the DDP query alone; `parse_config` stays public.
+- Minleon NDB-Pro code moves to a new library, `pyminleon` (public repo amattas/pyminleon, Apache-2.0, zero deps).
+  It also owns reading the NDB-Pro layout over HTTP (raw `/api/config` and `/api/status` documents).
+- Device/API code never lives in hass-ddp (HA rule: device communication belongs in a library).
+- hass-ddp owns the vendor-neutral `Controller` protocol and a config-flow "Controller type" step: detected type
+  preselected, "Generic DDP" always offered. Stored in entry data; entries migrated.
+- pyddp changes go on the existing branch `feature/ha-effect-color`; committed locally, pushed only on request.

@@ -17,6 +17,7 @@ from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.ddp.const import (
+    CONF_CONTROLLER_TYPE,
     CONF_DATA_TYPE,
     CONF_FIRMWARE,
     CONF_MANUFACTURER,
@@ -106,7 +107,8 @@ class FakeController:
 
     pages: dict[str, str] = field(
         default_factory=lambda: {
-            f"/{name}.html": (FIXTURES / f"{name}.html").read_text() for name in ("pfx2", "pcolors", "pshows")
+            **{f"/{name}.html": (FIXTURES / f"{name}.html").read_text() for name in ("pfx2", "pcolors", "pshows")},
+            **{f"/api/{name}": (FIXTURES / f"api_{name}.json").read_text() for name in ("config", "status")},
         }
     )
     requests: list[tuple[str, str, bytes]] = field(default_factory=list)
@@ -190,17 +192,27 @@ SEGMENTS = [
 def entry_factory(hass: HomeAssistant, udp_listener: Listener) -> Callable[..., MockConfigEntry]:
     """Build and register an entry pointing at the loopback listener (``port`` is a test-only data key).
 
-    With ``controller``, the entry is a discovered NDB-Pro (model ``NDBPRO``) whose HTTP UI is that fake
-    (``http_port`` is test-only too); without, its model is something else, so it gets no controller light.
+    With ``controller``, the entry's controller HTTP UI is that fake (``http_port`` is test-only too) and its type is
+    ``ndbpro`` unless ``controller_type`` says otherwise; without, it is Generic DDP and gets no Scenes light.
     """
 
-    def make(*, options: dict[str, Any] | None = None, controller: FakeController | None = None) -> MockConfigEntry:
-        extra: dict[str, Any] = {CONF_MODEL: "NDB-Pro"}
+    def make(
+        *,
+        options: dict[str, Any] | None = None,
+        controller: FakeController | None = None,
+        controller_type: str | None = None,
+    ) -> MockConfigEntry:
+        extra: dict[str, Any] = {CONF_MODEL: "NDB-Pro", CONF_CONTROLLER_TYPE: controller_type or "generic"}
         if controller is not None:
-            extra = {CONF_MODEL: "NDBPRO", "http_port": controller.port}
+            extra = {
+                CONF_MODEL: "NDBPRO",
+                CONF_CONTROLLER_TYPE: controller_type or "ndbpro",
+                "http_port": controller.port,
+            }
         entry = MockConfigEntry(
             domain=DOMAIN,
             title="NDB-Pro",
+            version=2,
             unique_id="127.0.0.1",
             data={
                 "host": "127.0.0.1",

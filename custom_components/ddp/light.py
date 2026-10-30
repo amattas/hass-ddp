@@ -1,4 +1,4 @@
-"""One light per segment (DDP), plus a "Scenes" light for an NDB-Pro's built-in effects (HTTP).
+"""One light per segment (DDP), plus a "Scenes" light for a vendor controller's built-in effects.
 
 Segment lights: on/off, brightness, RGB color, and pyddp effects, restored and re-sent on startup. The Scenes light
 selects the controller's built-in effects and stored presets; DDP data overrides those while it flows, so it turns the
@@ -22,42 +22,37 @@ from homeassistant.components.light.const import (
     ColorMode,
     LightEntityFeature,
 )
+from homeassistant.components.light.const import DOMAIN as LIGHT_DOMAIN
 from homeassistant.const import CONF_HOST, STATE_ON
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback, async_get_current_platform
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoredExtraData, RestoreEntity
-from pyddp import (
-    ControllerError,
-    DDPQueryError,
-    EffectInfo,
-    EffectRunner,
-    NDBController,
-    NDBState,
-    PyDDPError,
-    list_effects,
-)
+from pyddp import EffectInfo, EffectRunner, PyDDPError, list_effects
 
 from . import DDPConfigEntry, DDPRuntime, SegmentConfig
 from .const import CONF_FIRMWARE, CONF_MANUFACTURER, CONF_MODEL, DOMAIN, SOLID_EFFECT
+from .controller import CONTROLLER_ERRORS, Controller, ControllerState
 
 _LOGGER = logging.getLogger(__name__)
 
 PARALLEL_UPDATES = 0  # sends are local UDP writes; the one polled entity per entry is the Scenes light
-SCAN_INTERVAL = timedelta(seconds=30)  # Scenes light polls the controller's UI; segment lights never poll
+SCAN_INTERVAL = timedelta(seconds=30)  # Scenes light polls the controller; segment lights never poll
 
 DEFAULT_BRIGHTNESS = 255
 DEFAULT_RGB: tuple[int, int, int] = (255, 255, 255)
 
 EFFECTS: dict[str, EffectInfo] = {info.name: info for info in list_effects() if info.name != SOLID_EFFECT}
 
-CONTROLLER_OFF = "Off"  # the NDB-Pro's built-in effect that blanks the lights; the Scenes light's off, not an effect
+CONTROLLER_OFF = "Off"  # the controller's built-in effect that blanks the lights; the Scenes light's off, not an effect
 SERVICE_RECALL_PRESET = "recall_preset"
 ATTR_PRESET = "preset"
 PRESET_COUNT = 20
 ATTR_LAST_EFFECT = "last_effect"
+SCENES_KEY = "controller"  # unique-ID suffix; unchanged so entities from before controller types survive
 
 
 async def async_setup_entry(
@@ -74,10 +69,15 @@ async def async_setup_entry(
     runtime = entry.runtime_data
     runtime.segment_lights = [DDPSegmentLight(entry, segment, device) for segment in runtime.segments]
     async_add_entities(runtime.segment_lights)
+    scenes_id = f"{entry.entry_id}_{SCENES_KEY}"
     if runtime.controller is None:
+        # Switched to Generic DDP: drop the Scenes entity the previous type registered.
+        registry = er.async_get(hass)
+        if stale := registry.async_get_entity_id(LIGHT_DOMAIN, DOMAIN, scenes_id):
+            registry.async_remove(stale)
         return
     # First read at setup; if the controller doesn't answer, the light starts unavailable and the poll retries.
-    async_add_entities([NDBScenesLight(entry, runtime.controller, device)], update_before_add=True)
+    async_add_entities([ScenesLight(entry, runtime.controller, device)], update_before_add=True)
     async_get_current_platform().async_register_entity_service(
         SERVICE_RECALL_PRESET,
         {probatio.Required(ATTR_PRESET): probatio.All(probatio.Coerce(int), probatio.Range(min=1, max=PRESET_COUNT))},
@@ -86,7 +86,7 @@ async def async_setup_entry(
 
 
 async def _async_recall_preset(entity: Entity, call: ServiceCall) -> None:
-    if not isinstance(entity, NDBScenesLight):
+    if not isinstance(entity, ScenesLight):
         raise ServiceValidationError(
             translation_domain=DOMAIN,
             translation_key="not_a_controller",
@@ -252,8 +252,8 @@ def _to_intensity(brightness: int) -> int:
     return max(1, round(brightness * 100 / 255))
 
 
-class NDBScenesLight(LightEntity, RestoreEntity):
-    """The NDB-Pro's built-in effects (its stored shows among them). The controller's UI is the truth; it is polled."""
+class ScenesLight(LightEntity, RestoreEntity):
+    """A vendor controller's built-in effects (stored shows included). The controller is the truth; it is polled."""
 
     _attr_has_entity_name = True
     _attr_name = "Scenes"
@@ -262,11 +262,11 @@ class NDBScenesLight(LightEntity, RestoreEntity):
     _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
     _attr_supported_features = LightEntityFeature.EFFECT
 
-    def __init__(self, entry: DDPConfigEntry, controller: NDBController, device: DeviceInfo) -> None:
+    def __init__(self, entry: DDPConfigEntry, controller: Controller, device: DeviceInfo) -> None:
         self._runtime: DDPRuntime = entry.runtime_data
         self._controller = controller
         self._host: str = entry.data[CONF_HOST]
-        self._attr_unique_id = f"{entry.entry_id}_controller"
+        self._attr_unique_id = f"{entry.entry_id}_{SCENES_KEY}"
         self._attr_device_info = device
         self._attr_is_on = False
         self._last_effect: str | None = None  # last effect other than "Off", seen or commanded
@@ -292,17 +292,17 @@ class NDBScenesLight(LightEntity, RestoreEntity):
         """Read the controller's state into the entity. Caller holds the lock."""
         try:
             state = await self._controller.state()
-        except (ControllerError, DDPQueryError) as err:
+        except CONTROLLER_ERRORS as err:
             if self._attr_available:
-                _LOGGER.warning("NDB-Pro at %s is unavailable: %s", self._host, err)
+                _LOGGER.warning("Controller at %s is unavailable: %s", self._host, err)
             self._attr_available = False
             return
         if not self._attr_available:
-            _LOGGER.info("NDB-Pro at %s is available again", self._host)
+            _LOGGER.info("Controller at %s is available again", self._host)
         self._attr_available = True
         self._apply(state)
 
-    def _apply(self, state: NDBState) -> None:
+    def _apply(self, state: ControllerState) -> None:
         self._attr_effect_list = [effect for effect in state.effects if effect != CONTROLLER_OFF]
         if state.intensity is not None:
             self._attr_brightness = _to_brightness(state.intensity)
@@ -326,7 +326,7 @@ class NDBScenesLight(LightEntity, RestoreEntity):
                 if brightness is not None:
                     await self._controller.set_intensity(_to_intensity(brightness))
                 await self._controller.set_effect(effect)
-            except PyDDPError as err:
+            except CONTROLLER_ERRORS as err:
                 raise self._controller_error(err) from err
             await self._hand_back()  # only once the controller took the command, so a failure keeps the DDP look
             if brightness is not None:
@@ -346,7 +346,7 @@ class NDBScenesLight(LightEntity, RestoreEntity):
                         segment_error = segment_error or err
             try:
                 await self._controller.set_effect(CONTROLLER_OFF)
-            except PyDDPError as err:
+            except CONTROLLER_ERRORS as err:
                 raise self._controller_error(err) from err
             self._attr_is_on, self._attr_effect = False, None
         self.async_write_ha_state()
@@ -358,7 +358,7 @@ class NDBScenesLight(LightEntity, RestoreEntity):
         async with self._lock:
             try:
                 await self._controller.recall_preset(preset - 1)
-            except PyDDPError as err:
+            except CONTROLLER_ERRORS as err:
                 raise self._controller_error(err) from err
             await self._hand_back()
             await self._refresh()
@@ -371,7 +371,7 @@ class NDBScenesLight(LightEntity, RestoreEntity):
         # A segment turned on mid-way (an HA scene applies lights concurrently) keeps its keepalive.
         self._runtime.release_if_idle()
 
-    def _controller_error(self, err: PyDDPError) -> HomeAssistantError:
+    def _controller_error(self, err: Exception) -> HomeAssistantError:
         return HomeAssistantError(
             translation_domain=DOMAIN,
             translation_key="controller_failed",

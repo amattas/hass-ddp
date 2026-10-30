@@ -9,11 +9,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
-from pyddp import DDP_PORT, DataType, DDPSender, DDPSendError, EffectRunner, NDBController, Segment, Strip
+from pyddp import DDP_PORT, DataType, DDPSender, DDPSendError, EffectRunner, Segment, Strip
 
 from .const import (
     CONF_BRIGHTNESS_CAP,
     CONF_COLOR_ORDER,
+    CONF_CONTROLLER_TYPE,
     CONF_DATA_TYPE,
     CONF_FPS,
     CONF_HTTP_PORT,
@@ -25,18 +26,20 @@ from .const import (
     DEFAULT_BRIGHTNESS_CAP,
     DEFAULT_COLOR_ORDER,
     DEFAULT_FPS,
+    DEFAULT_HTTP_PORT,
     DEFAULT_KEEPALIVE,
-    MODEL_NDBPRO,
     SEGMENT_KEY,
     SEGMENT_LENGTH,
     SEGMENT_NAME,
     SEGMENT_START,
 )
+from .controller import Controller, create_controller, type_for_model
 
 if TYPE_CHECKING:
     from .light import DDPSegmentLight
 
 PLATFORMS: list[Platform] = [Platform.LIGHT]
+CONFIG_VERSION = 2  # the config flow's VERSION
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,14 +55,14 @@ class SegmentConfig:
 class DDPRuntime:
     """Per-entry runtime: the one open sender, the segments, and at most one effect runner per segment key.
 
-    ``controller`` drives an NDB-Pro's built-in effects over HTTP (``None`` for any other controller), and
+    ``controller`` drives a vendor controller's built-in effects (``None`` for Generic DDP), and
     ``segment_lights`` lets the controller light hand the pixels back from DDP.
     """
 
     sender: DDPSender
     segments: list[SegmentConfig]
     fps: int
-    controller: NDBController | None = None
+    controller: Controller | None = None
     runners: dict[str, EffectRunner] = field(default_factory=dict)
     segment_lights: list[DDPSegmentLight] = field(default_factory=list)
 
@@ -112,9 +115,10 @@ def build_strip(entry: DDPConfigEntry) -> Strip:
 
 async def async_setup_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
     """Open the sender and forward to the light platform. Sends nothing; lights restore their own state."""
-    controller = None  # built before the socket opens, so a host it rejects leaks nothing
-    if entry.data.get(CONF_MODEL) == MODEL_NDBPRO:
-        controller = NDBController(entry.data[CONF_HOST], port=entry.data.get(CONF_HTTP_PORT, 80))
+    # Built before the socket opens, so a host it rejects leaks nothing. No probing: the stored type decides.
+    controller = create_controller(
+        entry.data[CONF_CONTROLLER_TYPE], entry.data[CONF_HOST], entry.data.get(CONF_HTTP_PORT, DEFAULT_HTTP_PORT)
+    )
     keepalive = float(entry.options.get(CONF_KEEPALIVE, DEFAULT_KEEPALIVE))
     sender = DDPSender(build_strip(entry), keepalive_interval=keepalive or None)
     try:
@@ -127,6 +131,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
     ]
     entry.runtime_data = DDPRuntime(sender, segments, int(entry.options.get(CONF_FPS, DEFAULT_FPS)), controller)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
+    """1 -> 2: entries gain a controller type; a discovered NDB-Pro keeps its Scenes light, the rest are Generic."""
+    if entry.version > CONFIG_VERSION:
+        return False
+    if entry.version == 1:
+        hass.config_entries.async_update_entry(
+            entry, data={**entry.data, CONF_CONTROLLER_TYPE: type_for_model(entry.data.get(CONF_MODEL))}, version=2
+        )
     return True
 
 

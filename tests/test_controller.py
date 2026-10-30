@@ -1,4 +1,4 @@
-"""The NDB-Pro "Scenes" light: built-in effects over the fake HTTP UI, and handing the pixels back from DDP."""
+"""The controller "Scenes" light: built-in effects over the fake HTTP UI, and handing the pixels back from DDP."""
 
 from __future__ import annotations
 
@@ -98,18 +98,19 @@ async def ndb_entry(
         assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-@pytest.mark.parametrize("ndbpro", [True, False], ids=["ndbpro", "manual"])
-async def test_scenes_light_only_for_ndbpro(
+@pytest.mark.parametrize("controller_type", ["ndbpro", "generic"])
+async def test_scenes_light_only_for_vendor_types(
     hass: HomeAssistant,
     entity_registry: er.EntityRegistry,
     fake_controller: FakeController,
     entry_factory: Callable[..., MockConfigEntry],
-    ndbpro: bool,
+    controller_type: str,
 ) -> None:
-    entry = entry_factory(controller=fake_controller if ndbpro else None)
+    # The stored type decides; a reachable NDB-Pro under a Generic entry is never probed.
+    entry = entry_factory(controller=fake_controller, controller_type=controller_type)
     await _setup(hass, entry)
 
-    if not ndbpro:
+    if controller_type == "generic":
         assert hass.states.get(SCENES) is None
         assert entry.runtime_data.controller is None
         assert fake_controller.requests == []
