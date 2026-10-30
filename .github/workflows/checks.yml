@@ -43,7 +43,6 @@ jobs:
       extra-checks: python scripts/check_coverage.py
       build: false
       audit: "off"
-      codeql: false # enable CodeQL default setup on the repository instead
 
   hacs:
     needs: approve
