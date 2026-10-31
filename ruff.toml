@@ -6,3 +6,7 @@ select = ["E", "F", "I", "B", "UP", "SIM", "S"]
 
 [lint.per-file-ignores]
 "tests/**" = ["S101"]
+# Versioned-docs publisher: runs git and mike with fixed argument lists.
+"scripts/**" = ["S603", "S607"]
+# The canonical docs test imports scripts/ after putting it on sys.path.
+"tests/docs/**" = ["E402", "S101"]
