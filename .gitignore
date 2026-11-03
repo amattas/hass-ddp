@@ -24,3 +24,6 @@ config/
 
 # Zensical build output
 /site/
+
+# Local AI tooling state (hygiene standard)
+.claude/
