@@ -37,3 +37,9 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
 - White channel: the user switches the NDB-Pro to a 4-channel input mode in its UI and reconfigures the entry;
   segment lights then get HA's RGBW color mode. Solid colors and patterns carry W; animated aioddp effects stay RGB.
   Reconfigure re-reads the layout so the data type and segment slots follow the controller.
+- Implementation notes (2026-11-05): the controller device links to the DDP device with `via_device_id` (HA 2026.10
+  deprecates `via_device`), so the Scenes light of a new entry is `light.<title>_<type label>_scenes`; existing
+  entities keep their IDs. The NDB-Pro's Warm White preset sends `#ffffff` and Cool White `#feffff` (the gold swatch
+  is UI only); pyminleon exposes both as constants and hass-ddp as the named colors `warm_white` / `cool_white`.
+  Light setup removes any light of the entry it did not create (dropped output, All outputs with one segment left,
+  Scenes on Generic). A pattern color with W is refused before aioddp sees it on an RGB entry or a non-RGBW effect.
