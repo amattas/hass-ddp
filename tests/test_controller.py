@@ -12,12 +12,13 @@ from unittest.mock import patch
 
 import probatio
 import pytest
-from aioddp import DDPSendError
+from aioddp import DDPSendError, process_frame
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_COLOR_MODE,
     ATTR_EFFECT,
     ATTR_EFFECT_LIST,
+    ATTR_RGB_COLOR,
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
     ColorMode,
@@ -42,6 +43,7 @@ from pytest_homeassistant_custom_component.common import (
 from custom_components.ddp import DDPRuntime
 from custom_components.ddp.const import DOMAIN
 from custom_components.ddp.controller import detect, fetch_layout
+from custom_components.ddp.coordinator import SCAN_INTERVAL
 
 from .conftest import FakeController, Listener
 
@@ -49,7 +51,9 @@ SCENES = "light.ndb_pro_minleon_ndb_pro_scenes"  # on the controller device "NDB
 OUT1 = "light.ndb_pro_output_1"
 OUT2 = "light.ndb_pro_output_2"
 ALL = "light.ndb_pro_all_outputs"
-FULL_STRIP = 122 * 3  # a keepalive resends the whole strip from offset 0
+OUT2_OFFSET = 80 * 3
+BLACK_OUT2 = bytes(42 * 3)
+DDP_LIGHTS = [OUT1, OUT2, ALL]
 EFFECTS = [
     "Test",
     "Show1",
@@ -218,7 +222,8 @@ async def test_turn_off_selects_off_and_blanks_segments(
     assert fake_controller.commands() == [_control('{"fx":"Off"}')]
     await udp_listener.wait_for(lambda p: p.offset == 0 and p.data == bytes(pixels * 3))
     assert _state(hass, SCENES).state == STATE_OFF
-    assert _state(hass, entity_id).state == STATE_OFF
+    # The lit light was blanked; the others showed the scene and just go off.
+    assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_OFF] * 3
     await _poll(ndb_entry)
     assert _state(hass, SCENES).state == STATE_OFF  # the controller reports "Off"; it is not an effect
 
@@ -300,10 +305,25 @@ async def _recall_preset(hass: HomeAssistant) -> None:
     await _call(hass, "recall_preset", SCENES, domain=DOMAIN, preset=3)
 
 
+def _external_scene(fake_controller: FakeController) -> Callable[[HomeAssistant], Awaitable[None]]:
+    """Select a scene in the controller's own UI, then let the 30 s poll see it."""
+
+    async def change(hass: HomeAssistant) -> None:
+        fake_controller.select("Show1")
+        async_fire_time_changed(hass, dt_util.utcnow() + SCAN_INTERVAL + timedelta(seconds=1))
+        await hass.async_block_till_done(wait_background_tasks=True)
+
+    return change
+
+
 @pytest.mark.parametrize(
     ("action", "command"),
-    [(_turn_on_scene, _control('{"fx":"Show1"}')), (_recall_preset, ("GET", "/pshows.html?r=2", b""))],
-    ids=["turn_on", "recall_preset"],
+    [
+        (_turn_on_scene, _control('{"fx":"Show1"}')),
+        (_recall_preset, ("GET", "/pshows.html?r=2", b"")),
+        (None, None),  # selected in the controller's own UI and seen by a poll
+    ],
+    ids=["turn_on", "recall_preset", "polled"],
 )
 @pytest.mark.parametrize(
     "lit",
@@ -315,11 +335,12 @@ async def test_scene_takes_the_pixels_back_from_ddp(
     udp_listener: Listener,
     fake_controller: FakeController,
     ndb_entry: MockConfigEntry,
-    action: Callable[[HomeAssistant], Awaitable[None]],
-    command: tuple[str, str, bytes],
+    action: Callable[[HomeAssistant], Awaitable[None]] | None,
+    command: tuple[str, str, bytes] | None,
     lit: list[tuple[str, dict[str, Any]]],
 ) -> None:
     runtime = ndb_entry.runtime_data
+    action = action or _external_scene(fake_controller)
     for entity_id, data in lit:
         await _call(hass, SERVICE_TURN_ON, entity_id, **data)
     await udp_listener.wait_for(lambda p: p.offset == 0)
@@ -329,14 +350,17 @@ async def test_scene_takes_the_pixels_back_from_ddp(
     await udp_listener.settle()
     udp_listener.packets.clear()
 
-    assert fake_controller.commands() == [command]
-    if command[0] == "GET":  # a recalled preset's effect is unknown until the controller is read again
+    assert fake_controller.commands() == ([] if command is None else [command])
+    if (
+        command is not None and command[0] == "GET"
+    ):  # a recalled preset's effect is unknown until the controller is read again
         assert fake_controller.requests[-3:] == [
             ("GET", f"/{page}.html", b"") for page in ("pfx2", "pcolors", "pcolors")
         ]
     assert runtime.runners == {}
     assert [t for t in asyncio.all_tasks() if t.get_name().startswith("aioddp-effect-")] == []
-    assert [_state(hass, entity_id).state for entity_id, _ in lit] == [STATE_OFF] * len(lit)
+    # Every DDP light shows the scene, the ones DDP drove included.
+    assert [_state(hass, entity_id).state for entity_id in DDP_LIGHTS] == [STATE_ON] * 3
     assert _state(hass, SCENES).state == STATE_ON
     # Neither a black frame nor a keepalive (default 1 s) follows: the controller's own scene takes over.
     await udp_listener.settle(2.2)
@@ -360,8 +384,118 @@ async def test_segment_turned_on_during_hand_back_keeps_its_keepalive(
         await _call(hass, SERVICE_TURN_ON, SCENES, effect="Show1")
 
     assert _state(hass, OUT1).state == STATE_ON
+    assert _state(hass, OUT2).state == STATE_ON  # showing the scene
     udp_listener.packets.clear()
-    await udp_listener.wait_for(lambda p: p.offset == 0 and len(p.data) == FULL_STRIP, timeout=2.5)
+    packet = await udp_listener.wait_for(lambda p: p.offset == 0, timeout=2.5)
+    assert len(packet.data) == 80 * 3  # keepalive resends OUT1's range only; OUT2's pixels are the scene's
+    assert all(p.offset == 0 for p in udp_listener.packets)
+
+
+@pytest.fixture
+async def fast_keepalive_entry(
+    hass: HomeAssistant, fake_controller: FakeController, entry_factory: Callable[..., MockConfigEntry]
+) -> AsyncIterator[MockConfigEntry]:
+    """An NDB-Pro entry whose keepalive fires every 0.5 s (the minimum), so a test can watch which pixels it holds."""
+    entry = entry_factory(controller=fake_controller, options={"keepalive": 0.5})
+    await _setup(hass, entry)
+    yield entry
+    if entry.state is ConfigEntryState.LOADED:
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def _keepalive_ranges(udp_listener: Listener) -> set[tuple[int, int]]:
+    """The (byte offset, byte length) ranges keepalive resends over the next 1.2 s."""
+    await udp_listener.settle()
+    udp_listener.packets.clear()
+    await udp_listener.settle(1.2)
+    return {(p.offset, len(p.data)) for p in udp_listener.packets}
+
+
+async def test_an_output_turned_off_during_a_scene_holds_black_on_its_pixels_only(
+    hass: HomeAssistant, udp_listener: Listener, fake_controller: FakeController, fast_keepalive_entry: MockConfigEntry
+) -> None:
+    sender = fast_keepalive_entry.runtime_data.sender
+    await _turn_on_scene(hass)
+    assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_ON] * 3
+    assert sender.stats.frames_sent == 0
+
+    # Off during a scene: black for Output 2 only, held by keepalive; Output 1 keeps showing the scene.
+    await _call(hass, SERVICE_TURN_OFF, OUT2)
+    packet = await udp_listener.wait_for(lambda p: p.offset == OUT2_OFFSET)
+    assert packet.data == BLACK_OUT2
+    assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_ON, STATE_OFF, STATE_ON]
+    assert await _keepalive_ranges(udp_listener) == {(OUT2_OFFSET, 42 * 3)}
+    assert all(p.data == BLACK_OUT2 for p in udp_listener.packets)
+
+    # A bare turn_on hands the pixels back to the scene: nothing sent, nothing held.
+    await _call(hass, SERVICE_TURN_ON, OUT2)
+    assert sender.stats.frames_sent == 1
+    assert _state(hass, OUT2).state == STATE_ON
+    assert await _keepalive_ranges(udp_listener) == set()
+
+    # A color takes Output 2 to DDP; Output 1 still shows the scene.
+    await _call(hass, SERVICE_TURN_ON, OUT2, rgb_color=(255, 0, 0))
+    packet = await udp_listener.wait_for(lambda p: p.offset == OUT2_OFFSET)
+    assert packet.data == process_frame(bytes((255, 0, 0)) * 42, sender.strip)
+    assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_ON] * 3
+    assert _state(hass, OUT2).attributes[ATTR_RGB_COLOR] == (255, 0, 0)
+
+    # The controller turned "Off" in its own UI: the scene's lights go off, the DDP-driven one keeps running.
+    fake_controller.select("Off")
+    await _poll(fast_keepalive_entry)
+    assert [_state(hass, e).state for e in [*DDP_LIGHTS, SCENES]] == [STATE_OFF, STATE_ON, STATE_OFF, STATE_OFF]
+    assert await _keepalive_ranges(udp_listener) == {(OUT2_OFFSET, 42 * 3)}
+
+
+@pytest.mark.parametrize("unblank", [[ALL], [OUT1, OUT2]], ids=["all-outputs", "output-by-output"])
+async def test_all_outputs_turned_off_during_a_scene_blanks_the_strip(
+    hass: HomeAssistant, udp_listener: Listener, fast_keepalive_entry: MockConfigEntry, unblank: list[str]
+) -> None:
+    sender = fast_keepalive_entry.runtime_data.sender
+    await _turn_on_scene(hass)
+
+    await _call(hass, SERVICE_TURN_OFF, ALL)
+    packet = await udp_listener.wait_for(lambda p: p.offset == 0)
+    assert packet.data == bytes(122 * 3)
+    assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_OFF] * 3
+
+    if len(unblank) > 1:
+        # One output back to the scene: only the other output's black is still held, and All outputs stays off.
+        await _call(hass, SERVICE_TURN_ON, OUT1)
+        assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_ON, STATE_OFF, STATE_OFF]
+        assert await _keepalive_ranges(udp_listener) == {(OUT2_OFFSET, 42 * 3)}
+    await _call(hass, SERVICE_TURN_ON, unblank[-1])
+
+    assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_ON] * 3
+    assert sender.stats.frames_sent == 1  # only the black frame
+    assert await _keepalive_ranges(udp_listener) == set()
+
+
+@pytest.mark.parametrize(
+    ("source", "sent"), [("scene", False), ("ddp", True)], ids=["showing-the-scene", "driven-by-ddp"]
+)
+async def test_restart_during_a_scene(
+    hass: HomeAssistant,
+    udp_listener: Listener,
+    fake_controller: FakeController,
+    entry_factory: Callable[..., MockConfigEntry],
+    source: str,
+    sent: bool,
+) -> None:
+    # Output 1 was on (showing the scene, or red over DDP); Output 2 was blanked, which is not restored.
+    on = {ATTR_BRIGHTNESS: 255, ATTR_RGB_COLOR: [255, 0, 0], ATTR_EFFECT: "off"}
+    mock_restore_cache_with_extra_data(
+        hass, [(State(OUT1, STATE_ON, on), {"source": source}), (State(OUT2, STATE_OFF), {"source": "blanked"})]
+    )
+    entry = entry_factory(controller=fake_controller)  # the controller still runs "Glow"
+    await _setup(hass, entry)
+    await udp_listener.settle()
+
+    assert [p.offset for p in udp_listener.packets] == ([0] if sent else [])
+    assert fake_controller.commands() == []
+    # Idle lights show the running scene; All outputs shares Output 1's pixels, so it shows them only off DDP.
+    assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_ON, STATE_ON, STATE_OFF if sent else STATE_ON]
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 @pytest.mark.parametrize("service", [SERVICE_TURN_OFF, SERVICE_TURN_ON])
@@ -415,6 +549,7 @@ async def test_controller_down_at_setup_recovers_on_poll(
         EFFECTS,
     )
     assert any("recovered" in r.getMessage() for r in caplog.records)  # logged once when it is back
+    assert _state(hass, OUT1).state == STATE_ON  # an idle DDP light now shows the scene the poll found
 
     # A command that succeeds after a failed poll logs the same recovery as a successful poll would.
     fake_controller.offline = True

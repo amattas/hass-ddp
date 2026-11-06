@@ -24,7 +24,7 @@ for which controllers have been exercised.
 
 | Entity | What it does |
 |---|---|
-| **Output N** light (one per output; **All** for a manually described strip) | On/off, brightness, RGB color (RGBW color for an RGBW entry), the aioddp effects, and multi-color patterns (`ddp.set_pattern`). Sends DDP; its state is assumed |
+| **Output N** light (one per output; **All** for a manually described strip) | On/off, brightness, RGB color (RGBW color for an RGBW entry), the aioddp effects, and multi-color patterns (`ddp.set_pattern`). Sends DDP; its state is assumed. While a controller scene runs it shows on (the scene), and turning it off disables just that output |
 | **All outputs** light (only when the controller has more than one output) | The same as an output light, over the whole strip: a pattern or effect runs on across the outputs in one DDP frame |
 | **Scenes** light (vendor controller types only, on the controller device) | Selects the controller's built-in effects and shows, brightness maps to its intensity. Its palette (the colors those effects use) is the `colors` and `background` attributes and is set with `ddp.set_colors`. Polled |
 
@@ -175,14 +175,31 @@ device existed keeps its entity ID, for example `light.ndbpro_scenes`.)
   the Scenes light on or take the pixels from a DDP light, and it is not saved to the controller's flash.
 
 **Segment lights vs. scenes.** DDP data overrides the controller's built-in effect immediately, and about 20 s after DDP
-stops the controller falls back to it. So the two kinds of light take turns:
+stops on its pixels the controller falls back to it. Each DDP light (the outputs and All outputs) shows what lights its
+pixels:
 
-- Turning on a scene (or recalling a preset) first turns every DDP light (the outputs and All outputs) off without
-  sending black and stops DDP, so the scene shows at once.
-- Turning a segment light on takes the pixels over again. While any segment light is on, the keepalive (default 1 s)
-  keeps re-sending its frame so the controller does not fall back mid-color; with keepalive 0 a solid color reverts to
-  the built-in effect after about 20 s.
-- When the last segment light turns off, DDP stops; about 20 s later the controller's own scene (or `Off`) is back.
+- Turning on a scene (or recalling a preset) stops DDP without sending black and shows every DDP light on: they show
+  the scene. A scene started from the controller's own UI does the same once the 30 s poll sees it.
+- Turning a DDP light off while a scene runs disables that output: black is sent for its pixels only and kept up by the
+  keepalive, and the scene keeps running on the other outputs. All outputs off blanks the whole strip and shows every
+  output off.
+- A bare `light.turn_on` (no brightness, color, or effect) of a disabled light hands its pixels back to the scene:
+  nothing is sent and the keepalive stops for them, and the controller resumes the scene there after its DDP timeout,
+  about 20 s later. A bare turn_on of All outputs brings back every output; brought back one at a time, All outputs
+  shows on again once no output is disabled.
+- Turning a DDP light on with a brightness, color, effect, or pattern takes its pixels over DDP again; the other lights
+  keep showing the scene. While a light holds pixels, the keepalive (default 1 s) keeps re-sending them so the
+  controller does not fall back mid-color; with keepalive 0 a solid color reverts to the built-in effect after about
+  20 s.
+- Turning the Scenes light off turns every DDP light off. When the poll sees the controller turned `Off` elsewhere,
+  the lights that showed or disabled the scene go off; lights driven over DDP keep running.
+- With no scene running, when the last DDP light turns off, DDP stops; about 20 s later the controller's own effect
+  (or `Off`) is back.
+- After a Home Assistant restart a disabled output is not restored (no black is sent, so the scene comes back on it),
+  and a light that showed the scene is not re-sent; with a scene running, the idle DDP lights show it again.
+
+Not verified on hardware yet: whether the NDB-Pro keeps its effect running on outputs DDP is not writing to. If it does
+not, disabling one output freezes the scene on the others.
 
 ## Examples: scenes on a schedule
 
@@ -349,7 +366,10 @@ Wi-Fi name are redacted.
   prevents this; with keepalive 0 a solid color reverts after about 20 s.
 - **Recalling a preset overwrites the controller's current colors** with the preset's. The integration never writes
   the controller's saved settings.
-- **Segment light state is assumed.** Changes made elsewhere (the controller's web UI, another sender) are not seen.
+- **Segment light state is assumed.** Changes made elsewhere (another sender) are not seen; the controller's own scene
+  starting or stopping is, at the next 30 s poll.
+- **Per-output disable during a scene is not verified on hardware.** If the NDB-Pro stops its effect on every output
+  while DDP writes to one, disabling one output freezes the scene on the others.
 - **Setup cannot verify the controller over DDP.** It only checks that a UDP socket opens; a wrong host looks fine
   until a frame is sent and nothing lights up.
 - **The Scenes light needs the controller's HTTP UI on port 80** and only exists for vendor controller types.

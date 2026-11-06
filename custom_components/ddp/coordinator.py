@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING
@@ -50,10 +51,16 @@ class DDPScenesCoordinator(DataUpdateCoordinator[SceneState]):
         self.controller = controller
         self._host: str = entry.data[CONF_HOST]
         self.lock = asyncio.Lock()
+        # Called with each polled state (and the one before it) under ``lock``, so a scene started or stopped
+        # outside HA reaches the DDP lights before a command can interleave. Commands never call it.
+        self.on_poll: Callable[[SceneState | None, SceneState], Awaitable[None]] | None = None
 
     async def _async_update_data(self) -> SceneState:
         async with self.lock:
-            return await self.read()
+            state = await self.read()
+            if self.on_poll is not None:
+                await self.on_poll(self.data, state)
+            return state
 
     async def read(self) -> SceneState:
         """Read the controller's state and palette. Callers sending commands hold ``lock``."""

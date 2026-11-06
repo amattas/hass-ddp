@@ -43,7 +43,10 @@ for which controllers have been exercised.
   prevents this; with keepalive 0 a solid color reverts after about 20 s.
 - **Recalling a preset overwrites the controller's current colors** with the preset's. The integration never writes
   the controller's saved settings.
-- **Segment light state is assumed.** Changes made elsewhere (the controller's web UI, another sender) are not seen.
+- **Segment light state is assumed.** Changes made elsewhere (another sender) are not seen; the controller's own scene
+  starting or stopping is, at the next 30 s poll.
+- **Per-output disable during a scene is not verified on hardware.** If the NDB-Pro stops its effect on every output
+  while DDP writes to one, disabling one output freezes the scene on the others.
 - **Setup cannot verify the controller over DDP.** It only checks that a UDP socket opens; a wrong host looks fine
   until a frame is sent and nothing lights up.
 - **The Scenes light needs the controller's HTTP UI on port 80** and only exists for vendor controller types.

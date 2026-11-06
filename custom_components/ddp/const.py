@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from itertools import permutations
 from typing import Final
 
@@ -48,6 +49,18 @@ DEFAULT_COLOR_ORDER: Final = {DATA_TYPE_RGB: "RGB", DATA_TYPE_RGBW: "RGBW"}
 
 # Effect name aioddp renders for a plain solid color; hidden from the effect list (HA's EFFECT_OFF means solid).
 SOLID_EFFECT: Final = "solid"
+
+
+class LightSource(StrEnum):
+    """What lights a DDP light's pixels: nothing, HA over DDP, the controller's running scene, or HA's held black
+    over a running scene (the light was turned off while the scene runs). The light is on for ``ddp`` and ``scene``.
+    """
+
+    OFF = "off"
+    DDP = "ddp"
+    SCENE = "scene"
+    BLANKED = "blanked"
+
 
 # Unique-ID suffix of the "All outputs" light, which spans the whole strip (entries with more than one segment).
 STRIP_KEY: Final = "strip"

@@ -48,6 +48,7 @@ from .const import (
     SERVICE_RECALL_PRESET,
     SERVICE_SET_COLORS,
     SERVICE_SET_PATTERN,
+    LightSource,
 )
 from .controller import NAMED_COLORS, PALETTE_SLOTS, Controller, create_controller, type_for_model
 from .coordinator import DDPScenesCoordinator
@@ -57,6 +58,7 @@ if TYPE_CHECKING:
 
 PLATFORMS: list[Platform] = [Platform.LIGHT]
 CONFIG_VERSION = 2  # the config flow's VERSION
+_RELEASED = "released"  # name of the pixel ranges ``release_unheld`` builds; aioddp segments need one
 
 _BYTE = probatio.All(probatio.Coerce(int), probatio.Range(min=0, max=255))
 _RGB = probatio.All(probatio.ExactSequence([_BYTE, _BYTE, _BYTE]), probatio.Coerce(tuple))
@@ -85,7 +87,7 @@ class DDPRuntime:
     ``controller`` drives a vendor controller's built-in effects (``None`` for Generic DDP) and ``scenes`` polls it.
     ``segment_lights`` is every DDP light (the per-output lights and, with several outputs, All outputs), so the
     controller light can hand the pixels back from DDP. ``ownership`` serializes a DDP light taking pixels that
-    another DDP light shares.
+    another DDP light shares. The sender keeps resending (keepalive) only the pixels a DDP light holds.
     """
 
     sender: DDPSender
@@ -97,10 +99,25 @@ class DDPRuntime:
     segment_lights: list[DDPSegmentLight] = field(default_factory=list)
     ownership: asyncio.Lock = field(default_factory=asyncio.Lock)
 
-    def release_if_idle(self) -> None:
-        """Stop keepalive resends once no DDP light is on, so the controller's own effect comes back."""
-        if not any(light.is_on for light in self.segment_lights):
+    @property
+    def scene_running(self) -> bool:
+        """A controller scene lights some of the DDP lights' pixels (shown, or blanked by HA's held black)."""
+        return any(light.source in (LightSource.SCENE, LightSource.BLANKED) for light in self.segment_lights)
+
+    def release_unheld(self) -> None:
+        """Stop keepalive resends of every pixel no DDP light holds, so the controller's own effect takes them back
+        after its DDP timeout. Sends nothing."""
+        held = sorted((light.segment for light in self.segment_lights if light.holding), key=lambda s: s.start)
+        if not held:
             self.sender.release()
+            return
+        end, pixel_count = 0, self.sender.strip.pixel_count
+        for segment in held:
+            if segment.start > end:
+                self.sender.release(Segment(_RELEASED, end, segment.start - end))
+            end = max(end, segment.end)
+        if end < pixel_count:
+            self.sender.release(Segment(_RELEASED, end, pixel_count - end))
 
     async def stop_runner(self, key: str) -> None:
         """Stop and forget the runner for ``key``, if any. Never blanks the segment."""

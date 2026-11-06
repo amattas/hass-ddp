@@ -60,3 +60,11 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
 - Not verified on hardware yet: whether the NDB-Pro keeps its effect running on outputs DDP is not writing to. If it
   does not, per-output disable freezes the other output; the README says so until the field test settles it.
 - Restart: `blanked` is not restored; after the first poll a running scene shows every idle DDP light as `scene`.
+- Implementation notes (2026-11-06): ownership hand-over applies to `ddp` lights only (a `scene` or `blanked` light
+  keeps its source when another light takes pixels over DDP). A poll runs the DDP-light changes under the
+  coordinator's lock before it publishes (`DDPScenesCoordinator.on_poll`, set by the Scenes light), so commands never
+  trigger them; "scene start" is a change to a different non-Off effect. A first read after an unreachable start (or
+  setup) only moves idle lights (off, no overlapping `ddp` light) to `scene`, since DDP may have been overriding that
+  effect all along. Restore stores the source: a light that was on showing a scene is not re-sent. All outputs is
+  blanked only while an output it covers is; its outputs hold their own black, so un-blanking one releases just that
+  output. With no scene running an off light still keeps its black held while another light is `ddp`.
