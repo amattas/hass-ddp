@@ -21,8 +21,9 @@ def _load(name: str) -> dict[str, Any]:
 
 
 def _used_keys() -> dict[str, set[str]]:
-    """Translation keys in the source: ``exception`` (translation_key=), ``selector`` and ``entity`` (_attr_)."""
-    used: dict[str, set[str]] = {"exception": set(), "selector": set(), "entity": set()}
+    """Translation keys in the source: ``exception`` (translation_key=), ``selector``, and ``entity.<platform>``
+    (_attr_ in the platform's module)."""
+    used: dict[str, set[str]] = {"exception": set(), "selector": set()}
     for path in PACKAGE.glob("*.py"):
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.keyword) and node.arg == "translation_key":
@@ -32,7 +33,7 @@ def _used_keys() -> dict[str, set[str]]:
             elif isinstance(node, ast.Assign) and any(
                 isinstance(t, ast.Name) and t.id == "_attr_translation_key" for t in node.targets
             ):
-                used["entity"].add(ast.literal_eval(node.value))
+                used.setdefault(f"entity.{path.stem}", set()).add(ast.literal_eval(node.value))
     return used
 
 
@@ -51,10 +52,13 @@ def test_translations_match_strings() -> None:
 
 def test_every_used_key_is_translated() -> None:
     strings, used = _load("strings.json"), _used_keys()
-    assert used["exception"] and used["selector"] and used["entity"]  # the scan found something to check
+    platforms = {key.removeprefix("entity."): keys for key, keys in used.items() if key.startswith("entity.")}
+    assert used["exception"] and used["selector"]  # the scan found something to check
+    assert set(platforms) == {"light", "select", "switch"}
     assert used["exception"] <= set(strings["exceptions"])
     assert used["selector"] <= set(strings["selector"])
-    assert used["entity"] <= set(strings["entity"]["light"])
+    for platform, keys in platforms.items():
+        assert keys <= set(strings["entity"][platform]), platform
     assert {"cannot_connect", "invalid_config"} <= set(strings["config"]["error"])  # config flow errors
     assert {"already_configured", "reconfigure_successful"} <= set(strings["config"]["abort"])
     assert "invalid_keepalive" in strings["options"]["error"]

@@ -203,7 +203,7 @@ def entry_factory(hass: HomeAssistant, udp_listener: Listener) -> Callable[..., 
     """Build and register an entry pointing at the loopback listener (``port`` is a test-only data key).
 
     With ``controller``, the entry's controller HTTP UI is that fake (``http_port`` is test-only too) and its type is
-    ``ndbpro`` unless ``controller_type`` says otherwise; without, it is Generic DDP and gets no Scenes light.
+    ``ndbpro`` unless ``controller_type`` says otherwise; without, it is Generic DDP and gets no controller device.
     ``segments`` replaces the two-output layout; ``data_type`` "rgbw" makes it a 4-channel strip.
     """
 

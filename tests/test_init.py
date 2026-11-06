@@ -43,14 +43,14 @@ async def test_migrate_v1_entry(
             "pixel_count": 10,
             "data_type": "rgb",
             "segments": [{"key": "all", "name": "All", "start": 0, "length": 10}],
-            "http_port": 1,  # nothing listens: the Scenes light starts unavailable, which setup tolerates
+            "http_port": 1,  # nothing listens: the controller entities start unavailable, which setup tolerates
             **data,
         },
     )
     entry.add_to_hass(hass)
     registry = er.async_get(hass)
     scenes_unique_id = f"{entry.entry_id}_controller"
-    if controller_type == "ndbpro":  # the Scenes light a v1 NDB-Pro entry already had
+    if controller_type == "ndbpro":  # the Scenes light (now the controller light) a v1 NDB-Pro entry already had
         old = registry.async_get_or_create(
             "light", DOMAIN, scenes_unique_id, config_entry=entry, suggested_object_id="legacy_scenes"
         )

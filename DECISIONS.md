@@ -92,3 +92,19 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
   All read through the one coordinator poll; a command publishes its result and reads back after it.
 - Warm White reads back from the controller as #c69740 and Cool White as #feffff; the slot lights show those as the
   effect, not as a color. The light entity, `ddp.set_colors` and `ddp.recall_preset` stay for automations.
+- Implementation notes (2026-11-06): the controller light keeps its unique ID (`<entry>_controller`) and gets
+  `_attr_name = None`; its translation key is now `controller` (icon and the `colors`/`background` attribute names,
+  no entity name), replacing `scenes`. Existing entities keep their entity IDs; new ones read
+  `light.<entry>_minleon_ndb_pro`, `switch.<entry>_minleon_ndb_pro_power`, `select.<entry>_minleon_ndb_pro_scene`,
+  `light.<entry>_minleon_ndb_pro_color_N`, and the DDP lights `light.<entry>_generic_ddp_output_N`. The command logic
+  (turn on with an effect, off = controller Off plus blanking the DDP-driven segments, recall a preset, set the
+  palette or one slot) lives in `commands.py` (`ControllerCommands`, `runtime.commands`), shared by the light, Power,
+  Scene and the Color lights; the hand-back to the scene and `sync_holds` are unchanged. The last scene for a bare
+  turn_on is the coordinator's `last_effect` (any poll or command that saw a non-Off effect), restored by the
+  controller light's extra data, so Power on finds it too. Polls still reach the DDP lights only through the
+  controller light's `on_poll`. A slot command publishes the new palette (no read-back), except before the first
+  read, when the other slots are unknown and the palette is read back. A Color light's bare turn_on sends the slot's
+  last non-empty color (restore extra data `last_color`; a named white is remembered as its exact value), white
+  `(255, 255, 255)` (Warm White) by default; a brightness scales the color sent, a named white is always sent exact.
+  Warm White reads back as `#c69740` = `(198, 151, 64)`. Switch and select are removed on a switch to Generic with the
+  controller device (the device registry removes its entities); the light platform drops stale controller lights.

@@ -13,7 +13,7 @@
       },
       "controller": {
         "title": "Controller type",
-        "description": "Detected controller: {detected}. A vendor controller type adds a Scenes light for the controller's built-in effects and presets. Generic DDP creates only the per-output DDP lights.",
+        "description": "Detected controller: {detected}. A vendor controller type adds a controller device with a light for the controller's built-in effects and presets, a Power switch, a Scene select and a light per palette color. Generic DDP creates only the per-output DDP lights.",
         "data": {
           "controller_type": "Controller type"
         },
@@ -35,7 +35,7 @@
       },
       "reconfigure": {
         "title": "Reconfigure the controller",
-        "description": "Detected controller: {detected}. Stored pixel type: {data_type}. Layout the controller reports now: {layout}. Submitting stores the reported layout (pixel type, outputs and pixel count), so a change of the controller's input mode (3 or 4 channels) takes effect; an output that is gone loses its light. When the controller reports no layout (none), the stored layout is kept. Changing the host keeps the device and its lights. Changing the type adds or removes the Scenes light; the DDP lights are kept.",
+        "description": "Detected controller: {detected}. Stored pixel type: {data_type}. Layout the controller reports now: {layout}. Submitting stores the reported layout (pixel type, outputs and pixel count), so a change of the controller's input mode (3 or 4 channels) takes effect; an output that is gone loses its light. When the controller reports no layout (none), the stored layout is kept. Changing the host keeps the device and its lights. Changing the type adds or removes the controller device and its entities; the DDP lights are kept.",
         "data": {
           "host": "Host",
           "controller_type": "Controller type"
@@ -96,7 +96,7 @@
       "message": "Could not command the controller for {entity}: {error}"
     },
     "not_a_controller": {
-      "message": "{entity} is not a controller Scenes light; recall_preset works only on a Scenes light."
+      "message": "{entity} is not a controller light; recall_preset works only on the light named like the controller device."
     },
     "socket_failed": {
       "message": "Cannot open a DDP socket to {host}: {error}"
@@ -108,7 +108,7 @@
       "message": "The controller at {host} did not answer: {error}"
     },
     "not_a_ddp_light": {
-      "message": "{entity} is a controller Scenes light; set_pattern works only on a DDP output light or All outputs."
+      "message": "{entity} is not a DDP light; set_pattern works only on a DDP output light or All outputs."
     },
     "effect_without_colors": {
       "message": "Effect {effect} takes no colors, so it cannot show a pattern. Effects that can: {effects}"
@@ -117,7 +117,7 @@
       "message": "Invalid pattern for effect {effect}: {error}"
     },
     "palette_not_a_controller": {
-      "message": "{entity} is not a controller Scenes light; set_colors works only on a Scenes light."
+      "message": "{entity} is not a controller light; set_colors works only on the light named like the controller device."
     },
     "rgbw_needs_rgbw_pixels": {
       "message": "{entity} drives RGB pixels, so pattern colors take red, green, blue only. To use white, switch the controller to a 4-channel input mode and reconfigure the entry."
@@ -165,7 +165,7 @@
     },
     "set_colors": {
       "name": "Set colors",
-      "description": "Sets the colors the controller's built-in effects use (its palette of 5 custom colors), on a controller Scenes light. The light need not be on, and DDP lights keep the pixels. No colors clears the palette, so the controller picks random colors.",
+      "description": "Sets the colors the controller's built-in effects use (its palette of 5 custom colors), on a controller light. The light need not be on, and DDP lights keep the pixels. No colors clears the palette, so the controller picks random colors.",
       "fields": {
         "colors": {
           "name": "Colors",
@@ -180,11 +180,31 @@
   },
   "entity": {
     "light": {
-      "scenes": {
-        "name": "Scenes"
+      "controller": {
+        "state_attributes": {
+          "colors": {
+            "name": "Colors"
+          },
+          "background": {
+            "name": "Background"
+          }
+        }
       },
       "all_outputs": {
         "name": "All outputs"
+      },
+      "color": {
+        "name": "Color {slot}"
+      }
+    },
+    "select": {
+      "scene": {
+        "name": "Scene"
+      }
+    },
+    "switch": {
+      "power": {
+        "name": "Power"
       }
     }
   }

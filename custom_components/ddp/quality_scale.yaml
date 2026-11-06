@@ -7,8 +7,8 @@ rules:
   appropriate-polling:
     status: done
     comment: |
-      Only the Scenes light polls, every 30 s, through its coordinator (one local HTTP read). The interval is a
-      constant, not a config field. Segment lights never poll: DDP has no read path.
+      Only the controller device polls, every 30 s, through one coordinator its entities share (one local HTTP read).
+      The interval is a constant, not a config field. Segment lights never poll: DDP has no read path.
   brands:
     status: todo
     comment: |
@@ -17,7 +17,9 @@ rules:
       home-assistant/brands pull request is only for core integrations.
   common-modules:
     status: done
-    comment: coordinator.py holds DDPScenesCoordinator and entity.py the DDPEntity base.
+    comment: |
+      coordinator.py holds DDPScenesCoordinator, commands.py the controller commands the controller device's entities
+      share, and entity.py the DDPEntity and ControllerEntity bases.
   config-flow-test-coverage:
     status: done
     comment: config_flow.py is at 100% line coverage (user, controller, manual, reconfigure, options, error paths).
@@ -50,18 +52,20 @@ rules:
   entity-event-setup:
     status: exempt
     comment: |
-      No entity subscribes to events. The Scenes light listens to its coordinator, whose listener CoordinatorEntity
-      removes itself.
+      No entity subscribes to events. The controller device's entities listen to their coordinator, whose listeners
+      CoordinatorEntity removes.
   entity-unique-id:
     status: done
     comment: |
-      Unique IDs are <config entry id>_<segment key>, <config entry id>_strip for All outputs, or
-      <config entry id>_controller for the Scenes light.
+      Unique IDs are <config entry id>_<segment key>, <config entry id>_strip for All outputs, and on the controller
+      device <config entry id>_controller (its light; unchanged from the Scenes light it was), _power, _scene, and
+      _color_1 to _color_5.
   has-entity-name:
     status: done
     comment: |
-      DDPEntity sets _attr_has_entity_name; segment lights are named after their output, All outputs and the Scenes
-      light by translation.
+      DDPEntity sets _attr_has_entity_name; segment lights are named after their output, the controller light is the
+      controller device's main entity (name None), and All outputs, Power, Scene, and Color 1-5 are named by
+      translation.
   runtime-data:
     status: done
     comment: DDPConfigEntry = ConfigEntry[DDPRuntime], stored in entry.runtime_data.
@@ -75,7 +79,7 @@ rules:
     comment: |
       Setup only opens a UDP socket (ConfigEntryNotReady if it fails) and rejects an unknown controller type
       (ConfigEntryError). DDP over UDP has no reachability signal, and the vendor HTTP read is not a gate by design:
-      the DDP lights load even when the controller's web UI is slow, and only the Scenes light waits for a poll.
+      the DDP lights load even when the controller's web UI is slow, and only the controller device's entities wait for a poll.
   unique-config-entry:
     status: done
     comment: The unique ID is the host; adding or reconfiguring to a host that is already configured aborts.
@@ -85,7 +89,8 @@ rules:
     status: done
     comment: |
       Failed sends and controller errors raise HomeAssistantError; unknown effects, invalid set_pattern effects or
-      params, recall_preset or set_colors on a non-Scenes light, and set_pattern on the Scenes light raise ServiceValidationError.
+      params, an unknown palette white, recall_preset or set_colors on any light but the controller light, and
+      set_pattern on a controller device light raise ServiceValidationError.
   config-entry-unloading:
     status: done
     comment: Unload removes the lights (which stop their effect runners) and closes the socket without blanking.
@@ -98,7 +103,7 @@ rules:
   entity-unavailable:
     status: done
     comment: |
-      The Scenes light is a CoordinatorEntity and becomes unavailable when the controller does not answer. Segment
+      The controller device's entities are CoordinatorEntities and become unavailable when the controller does not answer. Segment
       lights stay available on purpose: DDP is send-only with no reachability signal, their state is assumed, and a
       failed send raises an error in the action instead.
   integration-owner:
@@ -110,8 +115,8 @@ rules:
   parallel-updates:
     status: done
     comment: |
-      light.py sets PARALLEL_UPDATES = 0: segment sends are independent local UDP writes and the Scenes light
-      serializes its own commands and polls with a lock.
+      light.py, switch.py and select.py set PARALLEL_UPDATES = 0: segment sends are independent local UDP writes, and
+      controller commands and polls serialize on the coordinator's lock.
   reauthentication-flow:
     status: exempt
     comment: DDP and the controller's web UI use no authentication.
@@ -127,7 +132,8 @@ rules:
     comment: |
       The DDP device (identifier: host; the output lights and All outputs) with manufacturer, model, and firmware when
       the controller reports them. A vendor controller type adds a controller device (identifier: host:controller,
-      named "<entry> <controller type>", via_device_id the DDP device) holding the Scenes light.
+      named "<entry> <controller type>", via_device_id the DDP device) holding the controller light, Power, Scene,
+      and Color 1-5; the DDP device is then named "<entry> Generic DDP".
   diagnostics:
     status: done
     comment: Entry, sender counters, scenes state, and the controller's raw documents with host, IPs, MAC, and SSID redacted.
@@ -168,17 +174,18 @@ rules:
       never at runtime (DDP has no way to announce a change).
   entity-category:
     status: exempt
-    comment: Every entity is a primary light; there are no config or diagnostic entities.
+    comment: Every entity is a primary control (lights, Power, Scene); there are no config or diagnostic entities.
   entity-device-class:
     status: exempt
-    comment: The light platform has no device classes.
+    comment: The light and select platforms have no device classes; Power is a generic switch, not an outlet.
   entity-disabled-by-default:
     status: exempt
-    comment: Every entity is a primary light that users want enabled.
+    comment: Every entity is a primary control (a light, Power, or Scene) that users want enabled.
   entity-translations:
     status: done
     comment: |
-      The Scenes and All outputs lights are named by translation. Segment lights carry the output label read from the
+      All outputs, Power, Scene, and Color 1-5 ("Color {slot}") are named by translation; the controller light takes
+      the device's name. Segment lights carry the output label read from the
       controller's layout and stored with the entry (Output 1, All), which is device data rather than a fixed string.
   exception-translations:
     status: done
@@ -186,7 +193,8 @@ rules:
   icon-translations:
     status: done
     comment: |
-      icons.json has the Scenes and All outputs lights and every action; segment lights use the default light icon.
+      icons.json has the controller light, All outputs, Color 1-5, Power, Scene, and every action; segment lights use
+      the default light icon.
   reconfiguration-flow:
     status: done
     comment: |
@@ -201,7 +209,7 @@ rules:
   stale-devices:
     status: done
     comment: |
-      Reconfiguring to Generic DDP removes the controller device with its Scenes light; a reconfigure whose layout
+      Reconfiguring to Generic DDP removes the controller device with its entities; a reconfigure whose layout
       lost an output removes that output's light (and All outputs once one output is left). The DDP device goes away
       with the entry.
 

@@ -1,4 +1,4 @@
-"""Base entity: the DDP lights belong to the DDP device; a vendor controller's Scenes light to the controller device."""
+"""Base entity: the DDP lights belong to the DDP device; a vendor controller's entities to the controller device."""
 
 from __future__ import annotations
 
@@ -6,21 +6,27 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import CONF_HOST
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from .commands import ControllerCommands
 from .const import (
     CONF_CONTROLLER_TYPE,
     CONF_FIRMWARE,
     CONF_MANUFACTURER,
     CONF_MODEL,
     CONTROLLER_DEVICE_SUFFIX,
+    CONTROLLER_OFF,
     DOMAIN,
     PATTERN_EFFECT,
     RGB,
 )
-from .controller import CONTROLLER_TYPES
+from .controller import CONTROLLER_TYPES, TYPE_GENERIC
+from .coordinator import DDPScenesCoordinator, SceneState
 
 if TYPE_CHECKING:
     from . import DDPConfigEntry
@@ -32,10 +38,14 @@ def device_identifiers(host: str) -> tuple[tuple[str, str], tuple[str, str]]:
 
 
 def ddp_device_info(entry: DDPConfigEntry) -> DeviceInfo:
-    """The DDP device: the DDP lights' device, named after the entry."""
+    """The DDP device: the DDP lights' device, named after the entry (a vendor entry's after the entry and Generic
+    DDP, next to its controller device)."""
+    name = entry.title
+    if entry.data[CONF_CONTROLLER_TYPE] != TYPE_GENERIC:
+        name = f"{name} {CONTROLLER_TYPES[TYPE_GENERIC].label}"
     return DeviceInfo(
         identifiers={device_identifiers(entry.data[CONF_HOST])[0]},
-        name=entry.title,
+        name=name,
         manufacturer=entry.data.get(CONF_MANUFACTURER),
         model=entry.data.get(CONF_MODEL),
         sw_version=entry.data.get(CONF_FIRMWARE),
@@ -60,7 +70,7 @@ class DDPEntity(Entity):
             )
 
     async def async_recall_preset(self, preset: int) -> None:
-        """The ``recall_preset`` action: only the Scenes light of a vendor controller type can."""
+        """The ``recall_preset`` action: only the controller light of a vendor controller type can."""
         raise ServiceValidationError(
             translation_domain=DOMAIN,
             translation_key="not_a_controller",
@@ -68,7 +78,7 @@ class DDPEntity(Entity):
         )
 
     async def async_set_colors(self, colors: Sequence[RGB], background: RGB | None = None) -> None:
-        """The ``set_colors`` action: only the Scenes light of a vendor controller type can."""
+        """The ``set_colors`` action: only the controller light of a vendor controller type can."""
         raise ServiceValidationError(
             translation_domain=DOMAIN,
             translation_key="palette_not_a_controller",
@@ -89,3 +99,28 @@ class DDPEntity(Entity):
             translation_key="not_a_ddp_light",
             translation_placeholders={"entity": self.entity_id},
         )
+
+
+def controller_device_parent(hass: HomeAssistant, entry: DDPConfigEntry) -> str:
+    """The DDP device's registry ID, creating it if needed: the controller device is connected through it."""
+    return dr.async_get(hass).async_get_or_create(config_entry_id=entry.entry_id, **ddp_device_info(entry)).id
+
+
+class ControllerEntity(CoordinatorEntity[DDPScenesCoordinator], DDPEntity):
+    """An entity of the controller device: reads the coordinator's poll, commands through ``ControllerCommands``."""
+
+    def __init__(self, entry: DDPConfigEntry, commands: ControllerCommands, key: str, ddp_device_id: str) -> None:
+        CoordinatorEntity.__init__(self, commands.coordinator)
+        DDPEntity.__init__(self, entry, key, ddp_device_id=ddp_device_id)
+        self._commands = commands
+
+    @property
+    def scene(self) -> SceneState | None:
+        """The coordinator's data: what the controller runs, ``None`` before the first successful read."""
+        return self.coordinator.data
+
+    @property
+    def scene_on(self) -> bool:
+        """The controller runs an effect other than "Off"."""
+        data = self.coordinator.data
+        return data is not None and data.effect is not None and data.effect != CONTROLLER_OFF

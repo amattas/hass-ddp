@@ -19,7 +19,7 @@ All protocol code lives in [aioddp](https://github.com/amattas/aioddp), and Minl
 
 | Device | Support |
 |---|---|
-| Minleon NDB-Pro with Rainmin RGB+ pixels | The reference device. DDP lights plus the Scenes light, `ddp.recall_preset`, and `ddp.set_colors` |
+| Minleon NDB-Pro with Rainmin RGB+ pixels | The reference device. DDP lights plus the controller device (light, Power, Scene, Color 1-5), `ddp.recall_preset`, and `ddp.set_colors` |
 | Any other DDP v1 controller (UDP port 4048) | **Generic DDP**: one light per output, or one light for the whole strip. Not tested beyond the DDP spec |
 
 RGB and RGBW pixels are supported. DDP is send-only, so Home Assistant cannot read a controller's state back over DDP;
@@ -49,7 +49,7 @@ for which controllers have been exercised.
   while DDP writes to one, disabling one output freezes the scene on the others.
 - **Setup cannot verify the controller over DDP.** It only checks that a UDP socket opens; a wrong host looks fine
   until a frame is sent and nothing lights up.
-- **The Scenes light needs the controller's HTTP UI on port 80** and only exists for vendor controller types.
+- **The controller device needs the controller's HTTP UI on port 80** and only exists for vendor controller types.
 - **The layout is read when the entry is added and on Reconfigure,** never at startup. If you re-patch outputs or
   change the controller's input mode, reconfigure the entry.
 - **White needs a 4-channel input mode.** The NDB-Pro must be set to a 4-channel (RGBW) input mode in its own UI for
@@ -67,10 +67,10 @@ for which controllers have been exercised.
 | Lights do not react | Host is right; UDP 4048 is not blocked between Home Assistant and the controller; nothing else is sending DDP to it; the output is patched on the controller. The brightness cap (default 60%) may also make colors dimmer than expected |
 | Colors are wrong (red and green swapped, ...) | Set **Color order** in the options to match the pixels |
 | A solid color turns into the controller's own effect after about 20 s | The keepalive is off or too long; set it to 1 s |
-| Scenes light is unavailable | The controller's web UI (TCP 80) is not answering. The DDP lights are unaffected; the Scenes light recovers on the next 30 s poll |
+| The controller light, Power, Scene, or Color lights are unavailable | The controller's web UI (TCP 80) is not answering. The DDP lights are unaffected; the controller device's entities recover on the next 30 s poll |
 | The controller has a new IP address | **Reconfigure** the entry and enter the new host (give the controller a DHCP reservation to avoid this) |
-| `ddp.recall_preset` or `ddp.set_colors` is refused | The target is a segment light, or the entry is Generic DDP, which has no Scenes light. `ddp.set_colors` also refuses more than 5 colors, a component outside 0-255, or a name other than `cool_white` / `warm_white` |
-| `ddp.set_pattern` is refused | The target is the Scenes light, the effect takes no colors (`rainbow`), or a `params` value is out of range or not a parameter of that effect (the message names it) |
+| `ddp.recall_preset` or `ddp.set_colors` is refused | The target is a segment light, or the entry is Generic DDP, which has no controller light. `ddp.set_colors` also refuses more than 5 colors, a component outside 0-255, or a name other than `cool_white` / `warm_white` |
+| `ddp.set_pattern` is refused | The target is a controller device light, the effect takes no colors (`rainbow`), or a `params` value is out of range or not a parameter of that effect (the message names it) |
 | A color with a white value is refused | The entry is RGB, or the effect is not `palette` (the animated effects render RGB only). For white, set the NDB-Pro to a 4-channel input mode and reconfigure the entry |
 | An output light turned off by itself | All outputs was turned on; it owns the pixels of every output until an output light is turned on again |
 

@@ -1,7 +1,7 @@
 """Controller types: which vendor controller (if any) sits behind the DDP output.
 
 Device communication lives in vendor libraries (pyminleon); this module is the glue. ``Controller`` is the
-vendor-neutral surface the Scenes light uses. Adding a vendor is one entry in ``CONTROLLER_TYPES``.
+vendor-neutral surface the controller device's entities use. Adding a vendor is one entry in ``CONTROLLER_TYPES``.
 """
 
 from __future__ import annotations
@@ -29,6 +29,8 @@ CONTROLLER_ERRORS: Final = (MinleonError,)
 PALETTE_SLOTS: Final = PALETTE_SIZE
 EMPTY_COLOR: Final[RGB] = NO_COLOR
 NAMED_COLORS: Final[dict[str, RGB]] = {COLOR_COOL_WHITE: COOL_WHITE, COLOR_WARM_WHITE: WARM_WHITE}
+# What the NDB-Pro's colors page reports for a slot once Warm White is set (it only displays #ffffff that way).
+WARM_WHITE_SHOWN: Final[RGB] = (0xC6, 0x97, 0x40)
 
 
 class ControllerState(Protocol):
@@ -63,7 +65,10 @@ class ControllerPreset(Protocol):
 
 
 class Controller(Protocol):
-    """A controller's built-in effects and presets, as the Scenes light drives them. Raises ``CONTROLLER_ERRORS``."""
+    """A controller's built-in effects, presets and palette, as the controller device's entities drive them.
+
+    Raises ``CONTROLLER_ERRORS``.
+    """
 
     async def state(self) -> ControllerState: ...
     async def presets(self) -> Sequence[ControllerPreset]: ...
@@ -71,6 +76,7 @@ class Controller(Protocol):
     async def set_intensity(self, percent: int) -> None: ...
     async def palette(self) -> ControllerPalette: ...
     async def set_palette(self, colors: Sequence[RGB], *, background: RGB | None = None) -> None: ...
+    async def set_color(self, slot: int, color: RGB) -> None: ...  # slot 1 to PALETTE_SLOTS; EMPTY_COLOR empties it
     async def recall_preset(self, slot: int) -> None: ...
     async def config(self) -> dict[str, Any]: ...  # raw documents, for diagnostics
     async def status(self) -> dict[str, Any]: ...

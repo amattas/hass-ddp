@@ -1,4 +1,5 @@
-"""The controller "Scenes" light: built-in effects over the fake HTTP UI, and handing the pixels back from DDP."""
+"""The controller device (light, Power, Scene, Color 1-5): built-in effects and palette over the fake HTTP UI, and
+handing the pixels back from DDP."""
 
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ from homeassistant.components.light import (
     DOMAIN as LIGHT_DOMAIN,
 )
 from homeassistant.config_entries import ConfigEntryState
-from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON, STATE_UNAVAILABLE
+from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, State
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
@@ -48,10 +49,13 @@ from custom_components.ddp.coordinator import SCAN_INTERVAL
 
 from .conftest import FakeController, Listener
 
-SCENES = "light.ndb_pro_minleon_ndb_pro_scenes"  # on the controller device "NDB-Pro Minleon NDB-Pro"
-OUT1 = "light.ndb_pro_output_1"
-OUT2 = "light.ndb_pro_output_2"
-ALL = "light.ndb_pro_all_outputs"
+SCENES = "light.ndb_pro_minleon_ndb_pro"  # the controller device "NDB-Pro Minleon NDB-Pro"'s main entity
+POWER = "switch.ndb_pro_minleon_ndb_pro_power"
+SCENE = "select.ndb_pro_minleon_ndb_pro_scene"
+COLORS = [f"light.ndb_pro_minleon_ndb_pro_color_{slot}" for slot in range(1, 6)]
+OUT1 = "light.ndb_pro_generic_ddp_output_1"  # the DDP device of a vendor entry is "NDB-Pro Generic DDP"
+OUT2 = "light.ndb_pro_generic_ddp_output_2"
+ALL = "light.ndb_pro_generic_ddp_all_outputs"
 OUT2_OFFSET = 80 * 3
 BLACK_OUT2 = bytes(42 * 3)
 DDP_LIGHTS = [OUT1, OUT2, ALL]
@@ -115,7 +119,7 @@ async def ndb_entry(
 
 
 @pytest.mark.parametrize("controller_type", ["ndbpro", "generic"])
-async def test_scenes_light_only_for_vendor_types(
+async def test_devices_and_names(
     hass: HomeAssistant,
     entity_registry: er.EntityRegistry,
     device_registry: dr.DeviceRegistry,
@@ -130,36 +134,58 @@ async def test_scenes_light_only_for_vendor_types(
     ddp_device = device_registry.async_get_device_by_identifier((DOMAIN, "127.0.0.1"), entry.entry_id)
     controller_device = device_registry.async_get_device_by_identifier((DOMAIN, "127.0.0.1:controller"), entry.entry_id)
     assert ddp_device is not None
-    assert (ddp_device.name, ddp_device.manufacturer, ddp_device.model) == ("NDB-Pro", "Minleon", "NDBPRO")
-    assert entity_registry.async_get(OUT1).device_id == ddp_device.id  # type: ignore[union-attr]
-    assert entity_registry.async_get(ALL).device_id == ddp_device.id  # type: ignore[union-attr]
+    assert (ddp_device.manufacturer, ddp_device.model) == ("Minleon", "NDBPRO")
     if controller_type == "generic":
-        assert hass.states.get(SCENES) is None
+        # One device, named after the entry; no controller entities.
+        assert ddp_device.name == "NDB-Pro"
+        assert [_state(hass, e).name for e in ["light.ndb_pro_output_1", "light.ndb_pro_all_outputs"]] == [
+            "NDB-Pro Output 1",
+            "NDB-Pro All outputs",
+        ]
         assert controller_device is None
+        assert {e.domain for e in er.async_entries_for_config_entry(entity_registry, entry.entry_id)} == {"light"}
+        assert len(er.async_entries_for_config_entry(entity_registry, entry.entry_id)) == 3
         assert entry.runtime_data.controller is None
         assert fake_controller.requests == []
-    else:
-        state = _state(hass, SCENES)
-        assert state.state == STATE_ON
-        assert state.attributes[ATTR_EFFECT] == "Glow"  # the fixture page's selected effect
-        assert state.attributes[ATTR_EFFECT_LIST] == EFFECTS
-        assert state.attributes[ATTR_BRIGHTNESS] == 255  # intensity 100
-        assert state.attributes[ATTR_COLOR_MODE] == ColorMode.BRIGHTNESS
-        assert (state.attributes["colors"], state.attributes["background"]) == (FIXTURE_COLORS, EMPTY)
-        registered = entity_registry.async_get(SCENES)
-        assert registered is not None
-        assert registered.unique_id == f"{entry.entry_id}_controller"
-        # The Scenes light is on its own controller device, connected through the DDP device.
-        assert controller_device is not None
-        assert registered.device_id == controller_device.id
-        assert (
-            controller_device.name,
-            controller_device.manufacturer,
-            controller_device.model,
-            controller_device.sw_version,
-            controller_device.via_device_id,
-        ) == ("NDB-Pro Minleon NDB-Pro", "Minleon", "NDBPRO", "1.2.3", ddp_device.id)
-        assert fake_controller.commands() == []  # setup only reads
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        return
+    assert ddp_device.name == "NDB-Pro Generic DDP"
+    assert controller_device is not None
+    assert (
+        controller_device.name,
+        controller_device.manufacturer,
+        controller_device.model,
+        controller_device.sw_version,
+        controller_device.via_device_id,
+    ) == ("NDB-Pro Minleon NDB-Pro", "Minleon", "NDBPRO", "1.2.3", ddp_device.id)
+    names = {
+        OUT1: ("NDB-Pro Generic DDP Output 1", "output1", ddp_device),
+        ALL: ("NDB-Pro Generic DDP All outputs", "strip", ddp_device),
+        SCENES: ("NDB-Pro Minleon NDB-Pro", "controller", controller_device),
+        POWER: ("NDB-Pro Minleon NDB-Pro Power", "power", controller_device),
+        SCENE: ("NDB-Pro Minleon NDB-Pro Scene", "scene", controller_device),
+        **{e: (f"NDB-Pro Minleon NDB-Pro Color {n}", f"color_{n}", controller_device) for n, e in enumerate(COLORS, 1)},
+    }
+    for entity_id, (name, key, device) in names.items():
+        registered = entity_registry.async_get(entity_id)
+        assert registered is not None, entity_id
+        assert (_state(hass, entity_id).name, registered.unique_id, registered.device_id) == (
+            name,
+            f"{entry.entry_id}_{key}",
+            device.id,
+        )
+    state = _state(hass, SCENES)
+    assert state.state == STATE_ON
+    assert state.attributes[ATTR_EFFECT] == "Glow"  # the fixture page's selected effect
+    assert state.attributes[ATTR_EFFECT_LIST] == EFFECTS
+    assert state.attributes[ATTR_BRIGHTNESS] == 255  # intensity 100
+    assert state.attributes[ATTR_COLOR_MODE] == ColorMode.BRIGHTNESS
+    assert (state.attributes["colors"], state.attributes["background"]) == (FIXTURE_COLORS, EMPTY)
+    assert _state(hass, POWER).state == STATE_ON
+    scene = _state(hass, SCENE)
+    assert (scene.state, scene.attributes["options"]) == ("Glow", EFFECTS)
+    assert [_state(hass, e).state for e in COLORS] == [STATE_ON] + [STATE_OFF] * 4  # bc1 #be38f3, the rest empty
+    assert fake_controller.commands() == []  # setup only reads
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -234,6 +260,150 @@ def _color(slot: int, color: str) -> tuple[str, str, bytes]:
 
 
 @pytest.mark.parametrize(
+    ("running", "restored", "domain", "service", "entity_id", "data", "body", "effect"),
+    [
+        ("Off", None, "switch", SERVICE_TURN_ON, POWER, {}, '{"fx":"Test"}', "Test"),  # no last scene: the first
+        ("Off", "Show2", "switch", SERVICE_TURN_ON, POWER, {}, '{"fx":"Show2"}', "Show2"),  # the light's last scene
+        ("Glow", None, "switch", SERVICE_TURN_OFF, POWER, {}, '{"fx":"Off"}', None),
+        ("Off", None, "select", "select_option", SCENE, {"option": "Snow"}, '{"fx":"Snow"}', "Snow"),
+        ("Glow", None, "select", "select_option", SCENE, {"option": "Snow"}, '{"fx":"Snow"}', "Snow"),
+        ("Off", "Show2", LIGHT_DOMAIN, SERVICE_TURN_ON, SCENES, {}, '{"fx":"Show2"}', "Show2"),
+        ("Glow", None, LIGHT_DOMAIN, SERVICE_TURN_OFF, SCENES, {}, '{"fx":"Off"}', None),
+    ],
+    ids=["power-on-first", "power-on-last", "power-off", "select-from-off", "select-other", "light-on", "light-off"],
+)
+async def test_power_and_scene_mirror_the_controller_light(
+    hass: HomeAssistant,
+    udp_listener: Listener,
+    fake_controller: FakeController,
+    entry_factory: Callable[..., MockConfigEntry],
+    running: str,
+    restored: str | None,
+    domain: str,
+    service: str,
+    entity_id: str,
+    data: dict[str, Any],
+    body: str,
+    effect: str | None,
+) -> None:
+    if restored is not None:
+        mock_restore_cache_with_extra_data(hass, [(State(SCENES, STATE_OFF), {"last_effect": restored})])
+    fake_controller.select(running)
+    entry = entry_factory(controller=fake_controller)
+    await _setup(hass, entry)
+    await _call(hass, SERVICE_TURN_ON, OUT1, rgb_color=(255, 0, 0))  # DDP drives Output 1
+    fake_controller.requests.clear()
+
+    await _call(hass, service, entity_id, domain=domain, **data)
+
+    assert fake_controller.commands() == [_control(body)]
+    on = effect is not None
+    for _ in range(2):  # the command's assumed state, then the poll reading it back
+        light, power, scene = _state(hass, SCENES), _state(hass, POWER), _state(hass, SCENE)
+        assert (light.state, light.attributes.get(ATTR_EFFECT)) == (STATE_ON if on else STATE_OFF, effect)
+        assert power.state == (STATE_ON if on else STATE_OFF)
+        assert scene.state == (effect or STATE_UNKNOWN)
+        # A scene takes the pixels back from DDP (Output 1 shows it); the controller's Off blanks and shows it off.
+        assert _state(hass, OUT1).state == (STATE_ON if on else STATE_OFF)
+        assert entry.runtime_data.runners == {}
+        await _poll(entry)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize(
+    ("shown", "state", "effect", "rgb"),
+    [
+        ("#000000", STATE_OFF, None, None),
+        ("#feffff", STATE_ON, "Cool White", (254, 255, 255)),
+        ("#c69740", STATE_ON, "Warm White", (198, 151, 64)),  # what the colors page shows once Warm White is set
+        ("#ffffff", STATE_ON, "Warm White", (255, 255, 255)),
+        ("#123456", STATE_ON, None, (0x12, 0x34, 0x56)),
+    ],
+    ids=["empty", "cool-white", "warm-white-shown", "warm-white-sent", "color"],
+)
+async def test_color_light_reads_its_palette_slot(
+    hass: HomeAssistant,
+    fake_controller: FakeController,
+    entry_factory: Callable[..., MockConfigEntry],
+    shown: str,
+    state: str,
+    effect: str | None,
+    rgb: tuple[int, int, int] | None,
+) -> None:
+    fake_controller.set_color(2, shown)
+    entry = entry_factory(controller=fake_controller)
+    await _setup(hass, entry)
+
+    color = _state(hass, COLORS[1])
+    assert color.state == state
+    assert color.attributes[ATTR_EFFECT_LIST] == ["Cool White", "Warm White"]
+    if state == STATE_ON:
+        assert (color.attributes[ATTR_EFFECT], color.attributes[ATTR_RGB_COLOR]) == (effect, rgb)
+        assert (color.attributes[ATTR_BRIGHTNESS], color.attributes[ATTR_COLOR_MODE]) == (255, ColorMode.RGB)
+    assert _state(hass, COLORS[0]).attributes[ATTR_RGB_COLOR] == (0xBE, 0x38, 0xF3)  # its own slot only
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize(
+    ("shown", "restored", "service", "data", "sent", "state", "effect"),
+    [
+        ("#000000", None, SERVICE_TURN_ON, {ATTR_RGB_COLOR: (255, 0, 0)}, "#ff0000", STATE_ON, None),
+        ("#000000", None, SERVICE_TURN_ON, {ATTR_EFFECT: "Cool White"}, "#feffff", STATE_ON, "Cool White"),
+        ("#123456", None, SERVICE_TURN_ON, {ATTR_EFFECT: "Warm White"}, "#ffffff", STATE_ON, "Warm White"),
+        (
+            "#000000",
+            None,
+            SERVICE_TURN_ON,
+            {ATTR_RGB_COLOR: (255, 0, 0), ATTR_BRIGHTNESS: 128},
+            "#800000",
+            STATE_ON,
+            None,
+        ),
+        ("#123456", None, SERVICE_TURN_ON, {ATTR_BRIGHTNESS: 51}, "#040a11", STATE_ON, None),  # its own color, scaled
+        ("#123456", None, SERVICE_TURN_OFF, {}, "#000000", STATE_OFF, None),
+        ("#000000", [0, 0, 255], SERVICE_TURN_ON, {}, "#0000ff", STATE_ON, None),  # the restored last color
+        ("#000000", None, SERVICE_TURN_ON, {}, "#ffffff", STATE_ON, "Warm White"),  # none: white
+    ],
+    ids=["rgb", "cool-white", "warm-white", "rgb-brightness", "brightness", "off", "bare-restored", "bare-default"],
+)
+async def test_color_light_sets_its_palette_slot(
+    hass: HomeAssistant,
+    fake_controller: FakeController,
+    entry_factory: Callable[..., MockConfigEntry],
+    shown: str,
+    restored: list[int] | None,
+    service: str,
+    data: dict[str, Any],
+    sent: str,
+    state: str,
+    effect: str | None,
+) -> None:
+    if restored is not None:
+        mock_restore_cache_with_extra_data(hass, [(State(COLORS[1], STATE_OFF), {"last_color": restored})])
+    fake_controller.set_color(2, shown)
+    entry = entry_factory(controller=fake_controller)
+    await _setup(hass, entry)
+    await _call(hass, SERVICE_TURN_ON, OUT1, rgb_color=(0, 255, 0))
+    fake_controller.requests.clear()
+
+    await _call(hass, service, COLORS[1], **data)
+
+    assert fake_controller.commands() == [_color(2, sent)]
+    slot = [int(sent[i : i + 2], 16) for i in (1, 3, 5)]
+    for _ in range(2):  # the command's published palette, then the poll reading the page back
+        color = _state(hass, COLORS[1])
+        assert (color.state, color.attributes.get(ATTR_EFFECT)) == (state, effect)
+        if effect is None and state == STATE_ON:
+            assert list(color.attributes[ATTR_RGB_COLOR]) == slot
+        # The controller light's palette updates at once; the other slots and DDP are untouched.
+        assert _state(hass, SCENES).attributes["colors"] == [FIXTURE_COLORS[0], slot, EMPTY, EMPTY, EMPTY]
+        assert _state(hass, COLORS[0]).state == STATE_ON
+        assert _state(hass, OUT1).state == STATE_ON
+        await _poll(entry)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize(
     ("data", "sent", "colors", "background"),
     [
         (
@@ -261,7 +431,7 @@ async def test_set_colors_sends_the_palette(
     colors: list[list[int]],
     background: list[int],
 ) -> None:
-    fake_controller.select("Off")  # the Scenes light need not be on
+    fake_controller.select("Off")  # the controller light need not be on
     entry = entry_factory(controller=fake_controller)
     await _setup(hass, entry)
 
@@ -626,6 +796,13 @@ async def test_controller_down_at_setup_recovers_on_poll(
     caplog.clear()
 
     fake_controller.offline = False
+    # A palette slot set before any read knows no other slot: the palette is read back. HA calls no action on an
+    # unavailable entity, so this drives the shared commands directly.
+    commands = entry.runtime_data.commands
+    assert commands is not None
+    await commands.set_color(COLORS[1], 2, (255, 0, 0))
+    assert fake_controller.commands() == [_color(2, "#ff0000")]
+    assert _state(hass, SCENES).attributes["colors"] == [FIXTURE_COLORS[0], [255, 0, 0], EMPTY, EMPTY, EMPTY]
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=62))
     await hass.async_block_till_done(wait_background_tasks=True)
     state = _state(hass, SCENES)
@@ -677,6 +854,22 @@ async def _set_colors(hass: HomeAssistant) -> None:
     await _call(hass, "set_colors", SCENES, domain=DOMAIN, colors=["warm_white"])
 
 
+async def _set_slot(hass: HomeAssistant) -> None:
+    await _call(hass, SERVICE_TURN_ON, COLORS[0], rgb_color=(255, 0, 0))
+
+
+async def _slot_effect(hass: HomeAssistant) -> None:
+    await _call(hass, SERVICE_TURN_ON, COLORS[0], effect="Daylight")
+
+
+async def _pattern_on_slot(hass: HomeAssistant) -> None:
+    await _call(hass, "set_pattern", COLORS[0], domain=DOMAIN, colors=[[255, 0, 0]])
+
+
+async def _recall_on_slot(hass: HomeAssistant) -> None:
+    await _call(hass, "recall_preset", COLORS[0], domain=DOMAIN, preset=1)
+
+
 @pytest.mark.parametrize(
     ("action", "offline", "segment_fails", "error", "out1_after"),
     [
@@ -689,6 +882,10 @@ async def _set_colors(hass: HomeAssistant) -> None:
         (_recall_preset, True, False, HomeAssistantError, STATE_ON),
         (_off, True, False, HomeAssistantError, STATE_OFF),
         (_set_colors, True, False, HomeAssistantError, STATE_ON),  # the palette is not DDP's: OUT1 stays on
+        (_set_slot, True, False, HomeAssistantError, STATE_ON),
+        (_slot_effect, False, False, ServiceValidationError, STATE_ON),
+        (_pattern_on_slot, False, False, ServiceValidationError, STATE_ON),
+        (_recall_on_slot, False, False, ServiceValidationError, STATE_ON),
         # A segment that cannot be blanked must not stop the controller's "Off".
         (_off, False, True, HomeAssistantError, STATE_ON),
     ],
@@ -701,6 +898,10 @@ async def _set_colors(hass: HomeAssistant) -> None:
         "recall-down",
         "turn_off-down",
         "set_colors-down",
+        "color-slot-down",
+        "color-slot-unknown-effect",
+        "pattern-on-color-slot",
+        "recall-on-color-slot",
         "segment-send-fails",
     ],
 )

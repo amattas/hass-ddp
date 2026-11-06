@@ -17,6 +17,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import service
 from homeassistant.helpers.typing import ConfigType
 
+from .commands import ControllerCommands
 from .const import (
     ATTR_BACKGROUND,
     ATTR_BLOCK_SIZE,
@@ -56,7 +57,7 @@ from .coordinator import DDPScenesCoordinator
 if TYPE_CHECKING:
     from .light import DDPSegmentLight
 
-PLATFORMS: list[Platform] = [Platform.LIGHT]
+PLATFORMS: list[Platform] = [Platform.LIGHT, Platform.SELECT, Platform.SWITCH]
 CONFIG_VERSION = 2  # the config flow's VERSION
 _HELD = "held"  # name of the pixel ranges ``sync_holds`` builds; aioddp segments need one
 
@@ -84,7 +85,8 @@ class SegmentConfig:
 class DDPRuntime:
     """Per-entry runtime: the one open sender, the segments, and at most one effect runner per segment key.
 
-    ``controller`` drives a vendor controller's built-in effects (``None`` for Generic DDP) and ``scenes`` polls it.
+    ``controller`` drives a vendor controller's built-in effects (``None`` for Generic DDP), ``scenes`` polls it and
+    ``commands`` (the controller device's entities share them) command it.
     ``segment_lights`` is every DDP light (the per-output lights and, with several outputs, All outputs), so the
     controller light can hand the pixels back from DDP. ``ownership`` serializes a DDP light taking pixels that
     another DDP light shares. The sender keeps resending (keepalive) only the pixels a DDP light holds: ``held`` is
@@ -96,6 +98,7 @@ class DDPRuntime:
     fps: int
     controller: Controller | None = None
     scenes: DDPScenesCoordinator | None = None
+    commands: ControllerCommands | None = None
     runners: dict[str, EffectRunner] = field(default_factory=dict)
     segment_lights: list[DDPSegmentLight] = field(default_factory=list)
     ownership: asyncio.Lock = field(default_factory=asyncio.Lock)
@@ -255,15 +258,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
     runtime = DDPRuntime(sender, segments, int(entry.options.get(CONF_FPS, DEFAULT_FPS)), controller, scenes)
     entry.runtime_data = runtime
     if scenes is not None:
-        # Not a setup gate: the DDP lights don't need the controller's HTTP UI, so a silent one leaves the Scenes
-        # light unavailable until a poll reaches it, instead of failing the entry.
+        runtime.commands = ControllerCommands(runtime, scenes)
+        # Not a setup gate: the DDP lights don't need the controller's HTTP UI, so a silent one leaves the controller
+        # device's entities unavailable until a poll reaches them, instead of failing the entry.
         await scenes.async_refresh()
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
-    """1 -> 2: entries gain a controller type; a discovered NDB-Pro keeps its Scenes light, the rest are Generic."""
+    """1 -> 2: entries gain a controller type; a discovered NDB-Pro keeps its controller light, the rest are Generic."""
     if entry.version == 1:  # a newer version is refused by Home Assistant before this runs
         hass.config_entries.async_update_entry(
             entry, data={**entry.data, CONF_CONTROLLER_TYPE: type_for_model(entry.data.get(CONF_MODEL))}, version=2

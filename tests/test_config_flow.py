@@ -24,7 +24,13 @@ from custom_components.ddp.const import DOMAIN
 from .conftest import FIXTURES, FakeController
 
 HOST = "127.0.0.1"
-SCENES = "light.ndb_pro_minleon_ndb_pro_scenes"
+# The controller device's entities (platform, unique-ID suffix), which only a vendor controller type has.
+CONTROLLER_ENTITIES = [
+    ("light", "controller"),
+    ("switch", "power"),
+    ("select", "scene"),
+    *(("light", f"color_{slot}") for slot in range(1, 6)),
+]
 DISCOVER = "custom_components.ddp.config_flow.discover"
 OPEN = "custom_components.ddp.config_flow.DDPSender.open"
 
@@ -268,7 +274,7 @@ async def test_reconfigure_changes_controller_type_and_reloads(
     entry = entry_factory(controller=flow_controller, controller_type=current)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert (entity_registry.async_get(SCENES) is not None) == (current == "ndbpro")
+    assert _controller_entities(entity_registry, entry) == (CONTROLLER_ENTITIES if current == "ndbpro" else [])
     controller_device = (DOMAIN, f"{HOST}:controller")
     assert (device_registry.async_get_device_by_identifier(controller_device, entry.entry_id) is not None) == (
         current == "ndbpro"
@@ -292,13 +298,23 @@ async def test_reconfigure_changes_controller_type_and_reloads(
     assert entry.data["controller_type"] == target
     assert entry.state is ConfigEntryState.LOADED
     assert (entry.runtime_data.controller is not None) == (target == "ndbpro")
-    assert (entity_registry.async_get(SCENES) is not None) == (target == "ndbpro")
-    # Switching to Generic removes the controller device with its Scenes light; the DDP device stays.
+    assert _controller_entities(entity_registry, entry) == (CONTROLLER_ENTITIES if target == "ndbpro" else [])
+    # Switching to Generic removes the controller device with its entities; the DDP device stays, renamed.
     assert (device_registry.async_get_device_by_identifier(controller_device, entry.entry_id) is not None) == (
         target == "ndbpro"
     )
-    assert device_registry.async_get_device_by_identifier((DOMAIN, HOST), entry.entry_id) is not None
+    ddp_device = device_registry.async_get_device_by_identifier((DOMAIN, HOST), entry.entry_id)
+    assert ddp_device is not None
+    assert ddp_device.name == ("NDB-Pro Generic DDP" if target == "ndbpro" else "NDB-Pro")
     assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+def _controller_entities(registry: er.EntityRegistry, entry: MockConfigEntry) -> list[tuple[str, str]]:
+    return [
+        (platform, key)
+        for platform, key in CONTROLLER_ENTITIES
+        if registry.async_get_entity_id(platform, DOMAIN, f"{entry.entry_id}_{key}") is not None
+    ]
 
 
 @pytest.mark.parametrize("title", [HOST, "Roofline"], ids=["title-is-host", "custom-title"])
@@ -421,7 +437,7 @@ async def test_reconfigure_rereads_the_layout(
     assert entry.options == kept_options
     assert entry.runtime_data.sender.strip.channels == (4 if data_type == "rgbw" else 3)
     # Unchanged outputs keep their entities (unique IDs are the layout's segment names); a dropped output and,
-    # with one output left, All outputs are removed. The Scenes light stays.
+    # with one output left, All outputs are removed. The controller light stays.
     after = {key: entity_registry.async_get_entity_id("light", DOMAIN, f"{entry.entry_id}_{key}") for key in before}
     expected = {key: before[key] if key in keys or key == "controller" or len(keys) > 1 else None for key in before}
     assert after == expected
