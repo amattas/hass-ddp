@@ -69,3 +69,15 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
   lights (off, no overlapping `ddp` light). Restore stores the source: a light that was on showing a scene is not re-sent. All outputs is
   blanked only while an output it covers is; its outputs hold their own black, so un-blanking one releases just that
   output. With no scene running an off light still keeps its black held while another light is `ddp`.
+
+## 2026-11-06: controller device entities
+
+- Names: the controller device's light is the device's main entity (no entity name), so it reads as the controller
+  (e.g. "Front Yard Minleon NDB-Pro") instead of "… Scenes". The DDP device of a vendor entry is named
+  "<title> Generic DDP" (the Generic DDP type label); a Generic entry keeps the title alone.
+- The controller device also gets: a `switch` "Power" (on = last scene, off = the controller's Off), a `select` "Scene"
+  listing the controller's effects, and five `light` entities "Color 1".."Color 5" for the palette slots: RGB color
+  picker, effect list ["Cool White", "Warm White"] for the controller's named whites, off = slot cleared (#000000).
+  All read through the one coordinator poll; a command publishes its result and reads back after it.
+- Warm White reads back from the controller as #c69740 and Cool White as #feffff; the slot lights show those as the
+  effect, not as a color. The light entity, `ddp.set_colors` and `ddp.recall_preset` stay for automations.
