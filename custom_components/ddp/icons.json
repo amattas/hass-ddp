@@ -1,14 +1,16 @@
 {
   "entity": {
     "light": {
-      "controller": {
-        "default": "mdi:palette"
-      },
       "all_outputs": {
         "default": "mdi:led-strip-variant"
       },
       "color": {
         "default": "mdi:format-color-fill"
+      }
+    },
+    "number": {
+      "intensity": {
+        "default": "mdi:brightness-percent"
       }
     },
     "select": {

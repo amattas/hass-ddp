@@ -44,7 +44,7 @@ class DDPScenesCoordinator(DataUpdateCoordinator[SceneState]):
 
     A failed read raises ``UpdateFailed``, which makes the controller device's entities unavailable and logs once on
     the way down and once on recovery (the coordinator's own behaviour). ``last_effect`` is the last effect other
-    than "Off" seen or commanded (a bare turn_on runs it); the controller light restores it across restarts.
+    than "Off" seen or commanded (a bare turn_on runs it); the Power switch restores it across restarts.
     """
 
     def __init__(self, hass: HomeAssistant, entry: DDPConfigEntry, controller: Controller) -> None:

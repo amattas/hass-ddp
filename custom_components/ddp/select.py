@@ -25,7 +25,7 @@ async def async_setup_entry(
 
 class SceneSelect(ControllerEntity, SelectEntity):
     """Options are the controller's effects without "Off"; none is selected while the controller is off. Selecting
-    one is the controller light's turn_on with that effect (it hands the pixels back from DDP)."""
+    one runs it (and hands the pixels back from DDP)."""
 
     _attr_translation_key = "scene"
 

@@ -26,10 +26,10 @@ from .conftest import FIXTURES, FakeController
 HOST = "127.0.0.1"
 # The controller device's entities (platform, unique-ID suffix), which only a vendor controller type has.
 CONTROLLER_ENTITIES = [
-    ("light", "controller"),
     ("switch", "power"),
-    ("select", "scene"),
     *(("light", f"color_{slot}") for slot in range(1, 6)),
+    ("select", "scene"),
+    ("number", "intensity"),
 ]
 DISCOVER = "custom_components.ddp.config_flow.discover"
 OPEN = "custom_components.ddp.config_flow.DDPSender.open"
@@ -414,7 +414,7 @@ async def test_reconfigure_rereads_the_layout(
     await hass.async_block_till_done()
     before = {
         key: entity_registry.async_get_entity_id("light", DOMAIN, f"{entry.entry_id}_{key}")
-        for key in ("output1", "output2", "strip", "controller")
+        for key in ("output1", "output2", "strip", "color_1")
     }
     assert None not in before.values()
 
@@ -437,9 +437,9 @@ async def test_reconfigure_rereads_the_layout(
     assert entry.options == kept_options
     assert entry.runtime_data.sender.strip.channels == (4 if data_type == "rgbw" else 3)
     # Unchanged outputs keep their entities (unique IDs are the layout's segment names); a dropped output and,
-    # with one output left, All outputs are removed. The controller light stays.
+    # with one output left, All outputs are removed. The controller's Color lights stay.
     after = {key: entity_registry.async_get_entity_id("light", DOMAIN, f"{entry.entry_id}_{key}") for key in before}
-    expected = {key: before[key] if key in keys or key == "controller" or len(keys) > 1 else None for key in before}
+    expected = {key: before[key] if key in keys or key == "color_1" or len(keys) > 1 else None for key in before}
     assert after == expected
     out1 = hass.states.get(before["output1"])  # type: ignore[arg-type]
     assert out1 is not None

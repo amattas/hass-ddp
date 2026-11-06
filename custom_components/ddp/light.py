@@ -1,4 +1,4 @@
-"""One light per segment (DDP), an "All outputs" light, and a "Scenes" light for a vendor controller's built-in effects.
+"""One light per segment (DDP), an "All outputs" light, and a vendor controller's palette lights "Color 1".."Color 5".
 
 Segment lights: on/off, brightness, RGB color (RGBW on an rgbw entry, white on the wire), aioddp effects, and
 multi-color patterns (``ddp.set_pattern``), restored and re-sent on startup. Effects that render RGB only (the
@@ -16,11 +16,11 @@ over DDP stops the overlapping lights' runners and shows the ``ddp`` and ``scene
 the pixels then show only the light that was turned on, where it covers them. Which pixels the sender keeps resending
 follows the lights' state (``DDPRuntime.sync_holds``, after every change).
 
-The controller light (the controller device's main entity, named like it) selects the controller's built-in effects
-and stored presets; DDP data overrides those while it flows, so once the controller took the command it puts every
-DDP light in ``scene`` (sending nothing) and releases the sender (``ControllerCommands``, shared with the Power switch
-and the Scene select). A poll that finds a scene started or stopped outside HA does the same. It also sets the palette
-those effects use (``ddp.set_colors``), which leaves DDP alone; "Color 1".."Color 5" set one palette slot each.
+The controller device's Power switch and Scene select run the controller's built-in effects and stored presets; DDP
+data overrides those while it flows, so once the controller took the command every DDP light goes to ``scene``
+(sending nothing) and the sender is released (``ControllerCommands``). A poll that finds a scene started or stopped
+outside HA does the same. "Color 1".."Color 5" set one slot each of the palette those effects use, which leaves DDP
+alone (``ddp.set_colors`` on Power sets them all).
 """
 
 from __future__ import annotations
@@ -52,9 +52,8 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoredExtraData, RestoreEntity
 
 from . import DDPConfigEntry, DDPRuntime, SegmentConfig
-from .commands import ControllerCommands, to_brightness
+from .commands import ControllerCommands
 from .const import (
-    ATTR_BACKGROUND,
     ATTR_BLOCK_SIZE,
     ATTR_COLORS,
     ATTR_PARAMS,
@@ -87,11 +86,9 @@ DEFAULT_RGBW: RGBW = (0, 0, 0, 255)  # white on an RGBW strip is its white LEDs 
 
 EFFECTS: dict[str, EffectInfo] = {info.name: info for info in list_effects() if info.name != SOLID_EFFECT}
 
-ATTR_LAST_EFFECT = "last_effect"
 ATTR_PATTERN = "pattern"
 ATTR_SOURCE = "source"  # restore data: a light that was on showing a scene is not re-sent
 ALL_SOURCES = tuple(LightSource)
-SCENES_KEY = "controller"  # unique-ID suffix; unchanged so entities from before controller types survive
 COLOR_KEY = "color"  # unique-ID suffix of a palette slot light, with its slot: color_1 .. color_5
 ATTR_LAST_COLOR = "last_color"  # restore data: a palette slot's last color, for a bare turn_on of an empty slot
 # The palette lights' effects: the controller's named whites, sent as their exact values.
@@ -167,8 +164,8 @@ def _effect_params(info: EffectInfo, colors: Sequence[Color], pattern: Pattern |
 async def async_setup_entry(
     hass: HomeAssistant, entry: DDPConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
-    """One light per configured segment, All outputs when there are several, and for a vendor controller its light
-    and the five palette slot lights."""
+    """One light per configured segment, All outputs when there are several, and for a vendor controller the five
+    palette slot lights."""
     runtime = entry.runtime_data
     lights = [DDPSegmentLight(entry, segment) for segment in runtime.segments]
     if len(runtime.segments) > 1:
@@ -176,11 +173,11 @@ async def async_setup_entry(
         lights.append(AllOutputsLight(entry, SegmentConfig(STRIP_KEY, None, whole)))
     runtime.segment_lights = lights
     # Drop lights this entry no longer has: an output the re-read layout lost, All outputs once one output is left,
-    # and the controller's lights after a switch to Generic DDP.
+    # the controller's lights after a switch to Generic DDP, and the controller light (``<entry>_controller``) that
+    # the Power switch replaced.
     current = {light.unique_id for light in lights}
     if runtime.commands is not None:
-        keys = [SCENES_KEY, *(f"{COLOR_KEY}_{slot}" for slot in range(1, PALETTE_SLOTS + 1))]
-        current |= {f"{entry.entry_id}_{key}" for key in keys}
+        current |= {f"{entry.entry_id}_{COLOR_KEY}_{slot}" for slot in range(1, PALETTE_SLOTS + 1)}
     registry = er.async_get(hass)
     for registered in er.async_entries_for_config_entry(registry, entry.entry_id):
         if registered.domain == LIGHT_DOMAIN and registered.unique_id not in current:
@@ -195,12 +192,7 @@ async def async_setup_entry(
         return
     parent = controller_device_parent(hass, entry)
     commands = runtime.commands
-    async_add_entities(
-        [
-            ScenesLight(entry, commands, parent),
-            *(PaletteLight(entry, commands, parent, slot) for slot in range(1, PALETTE_SLOTS + 1)),
-        ]
-    )
+    async_add_entities(PaletteLight(entry, commands, parent, slot) for slot in range(1, PALETTE_SLOTS + 1))
 
 
 def _color(value: object) -> Color | None:
@@ -653,70 +645,6 @@ class AllOutputsLight(DDPSegmentLight):
 
     def _normalize(self) -> None:
         self._source = self.source
-
-
-class ScenesLight(ControllerEntity, LightEntity, RestoreEntity):
-    """A vendor controller's built-in effects (stored shows included) and their palette: the controller device's main
-    entity, named like the device.
-
-    The controller is the truth; it is polled. The palette shows as the ``colors`` and ``background`` attributes.
-    """
-
-    _attr_name = None  # the device's main entity; the translation key gives the icon and attribute names
-    _attr_translation_key = "controller"
-    _attr_color_mode = ColorMode.BRIGHTNESS
-    _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
-    _attr_supported_features = LightEntityFeature.EFFECT
-
-    def __init__(self, entry: DDPConfigEntry, commands: ControllerCommands, ddp_device_id: str) -> None:
-        super().__init__(entry, commands, SCENES_KEY, ddp_device_id)
-        self._runtime: DDPRuntime = entry.runtime_data
-        self._attr_is_on = False
-        if self.scene is not None:
-            self._apply(self.scene)
-
-    async def async_added_to_hass(self) -> None:
-        """Remember the last scene for a bare turn_on. Never commands the controller: its own state is the truth."""
-        await super().async_added_to_hass()
-        extra = await self.async_get_last_extra_data()
-        last = extra.as_dict().get(ATTR_LAST_EFFECT) if extra is not None else None
-        if self.coordinator.last_effect is None and isinstance(last, str) and last != CONTROLLER_OFF:
-            self.coordinator.last_effect = last
-
-    @property
-    def extra_restore_state_data(self) -> ExtraStoredData:
-        return RestoredExtraData({ATTR_LAST_EFFECT: self.coordinator.last_effect})
-
-    @callback
-    def _handle_coordinator_update(self) -> None:
-        if self.scene is not None:
-            self._apply(self.scene)
-        super()._handle_coordinator_update()
-
-    def _apply(self, state: SceneState) -> None:
-        self._attr_effect_list = self._commands.effects
-        if state.intensity is not None:
-            self._attr_brightness = to_brightness(state.intensity)
-        self._attr_is_on = self.scene_on
-        self._attr_effect = state.effect if self._attr_is_on else None
-        if state.background is not None:
-            self._attr_extra_state_attributes = {
-                ATTR_COLORS: [list(color) for color in state.colors],
-                ATTR_BACKGROUND: list(state.background),
-            }
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        await self._commands.turn_on(self.entity_id, kwargs.get(ATTR_EFFECT), kwargs.get(ATTR_BRIGHTNESS))
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._commands.turn_off(self.entity_id)
-
-    async def async_recall_preset(self, preset: int) -> None:
-        await self._commands.recall_preset(self.entity_id, preset)
-
-    async def async_set_colors(self, colors: Sequence[RGB], background: RGB | None = None) -> None:
-        """The palette is the controller's own setting, so DDP keeps the pixels and the light need not be on."""
-        await self._commands.set_palette(self.entity_id, colors, background)
 
 
 def _scaled(color: RGB, brightness: int | None) -> RGB:
