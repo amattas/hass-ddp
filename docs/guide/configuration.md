@@ -5,10 +5,17 @@
 | Type | Lights |
 |---|---|
 | Generic DDP | One DDP light per output. Works with any DDP controller; nothing else is created |
-| Minleon NDB-Pro | The DDP lights, plus the **Scenes** light and the `ddp.recall_preset` action (see [NDB-Pro built-in scenes](entities.md#ndb-pro-built-in-scenes)) |
+| Minleon NDB-Pro | The DDP lights, plus a controller device with the **Scenes** light and the `ddp.recall_preset` and `ddp.set_colors` actions (see [NDB-Pro built-in scenes](entities.md#ndb-pro-built-in-scenes)) |
 
 The stored type decides: nothing probes the controller at startup. Adding another vendor's controller means one entry
 in the controller type registry (`custom_components/ddp/controller.py`) backed by that vendor's library.
+
+## Pixel type
+
+The entry's pixel type (RGB or RGBW) decides every DDP light's color mode: RGBW entries use `rgbw_color`. An NDB-Pro
+reports it from its input mode, so it must be set to a 4-channel mode in its own UI for the entry to be RGBW; then
+**Reconfigure** the entry to re-read the layout (pixel count, type, and outputs). Details are in
+[RGBW](entities.md#rgbw).
 
 ## Options
 
@@ -29,10 +36,11 @@ Saving options reloads the entry.
 - **The Scenes light polls the controller's web UI every 30 seconds** and again right after each command it sends. If
   the controller does not answer, only the Scenes light becomes unavailable (logged once, and again when it is back);
   the DDP lights keep working.
+- **Patterns are kept across restarts.** A DDP light restores its pattern with the rest of its state.
 
 ## Diagnostics
 
 **Settings > Devices & services > DDP Pixel Controller > Download diagnostics** includes the entry, the DDP sender's
-counters, and, for an NDB-Pro, the controller's config and status documents. The host, IP addresses, MAC address, and
-Wi-Fi name are redacted.
+counters, and, for an NDB-Pro, the Scenes light's state and palette and the controller's config and status
+documents. The host, IP addresses, MAC address, and Wi-Fi name are redacted.
 
