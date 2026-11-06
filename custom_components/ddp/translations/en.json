@@ -155,7 +155,7 @@
         },
         "params": {
           "name": "Effect parameters",
-          "description": "Other parameters of the effect, for example {\"speed\": 4} for chase."
+          "description": "Other parameters of the effect as a mapping, for example speed: 4 for chase."
         },
         "brightness": {
           "name": "Brightness",
