@@ -13,7 +13,7 @@ All protocol code lives in [aioddp](https://github.com/amattas/aioddp), and Minl
 
 | Device | Support |
 |---|---|
-| Minleon NDB-Pro with Rainmin RGB+ pixels | The reference device. DDP lights plus the controller device (Power, Color 1-5, Mode 1-5, Scene, Intensity), `ddp.recall_preset`, and `ddp.set_colors` |
+| Minleon NDB-Pro with Rainmin RGB+ pixels | The reference device. DDP lights plus the controller device (Power, Color 1-5, Scene, Intensity), `ddp.recall_preset`, and `ddp.set_colors` |
 | Any other DDP v1 controller (UDP port 4048) | **Generic DDP**: one light per output, or one light for the whole strip. Not tested beyond the DDP spec |
 
 RGB and RGBW pixels are supported. DDP is send-only, so Home Assistant cannot read a controller's state back over DDP;
@@ -28,7 +28,6 @@ for which controllers have been exercised.
 | **All outputs** light (only when the controller has more than one output) | The same as an output light, over the whole strip: a pattern or effect runs on across the outputs in one DDP frame |
 | **Power** switch (vendor controller types only; the controller device's main entity, named like the device) | On while the controller runs a scene. On brings back the last scene (else the first), also after a restart; off is the controller's `Off` and blanks the DDP lights too. Its `colors` and `background` attributes are the controller's palette (the colors its effects use), set with `ddp.set_colors`; `ddp.recall_preset` plays a stored preset. Polled |
 | **Color 1** to **Color 5** lights (controller device) | One palette slot each; off empties the slot. A Color tab for a custom color (brightness shows 255 and scales the color a turn_on sends) and a Temperature tab for the controller's white LEDs: warm (2700 K) or cool (6500 K) |
-| **Mode 1** to **Mode 5** selects (controller device) | What each palette slot holds: `Color`, `Warm White`, or `Cool White`, read from the slot. A white is set at once; `Color` brings back the slot's last custom color (red by default) |
 | **Scene** select (controller device) | The controller's built-in effects and shows; the running one is selected, none while it is `Off`. Selecting one runs it and hands the pixels back from DDP |
 | **Intensity** number (controller device, under Configuration) | The controller's own brightness for its scenes, 1-100%. A setting: it starts no scene and leaves DDP alone |
 
@@ -40,7 +39,7 @@ limitations).
 
 Devices: the output lights and All outputs are on the DDP device, named after the entry. A vendor controller type adds
 a controller device named after the entry and the type (for example "Front Yard Minleon NDB-Pro"), connected through
-the DDP device, with Power, Color 1 to 5, Mode 1 to 5, Scene, and Intensity on it; the DDP device is then named after
+the DDP device, with Power, Color 1 to 5, Scene, and Intensity on it; the DDP device is then named after
 the entry and Generic DDP ("Front Yard Generic DDP").
 
 Actions: `ddp.set_pattern` (DDP lights: the outputs and All outputs), and `ddp.recall_preset` and `ddp.set_colors`
@@ -94,7 +93,7 @@ and reloading or removing the integration never blanks the lights.
 | Type | Lights |
 |---|---|
 | Generic DDP | One DDP light per output. Works with any DDP controller; nothing else is created |
-| Minleon NDB-Pro | The DDP lights, plus a controller device with **Power** (its main entity), **Color 1** to **Color 5**, **Mode 1** to **Mode 5**, **Scene**, and **Intensity**, and the `ddp.recall_preset` and `ddp.set_colors` actions (see below) |
+| Minleon NDB-Pro | The DDP lights, plus a controller device with **Power** (its main entity), **Color 1** to **Color 5**, **Scene**, and **Intensity**, and the `ddp.recall_preset` and `ddp.set_colors` actions (see below) |
 
 The stored type decides: nothing probes the controller at startup. Adding another vendor's controller means one entry
 in the controller type registry (`custom_components/ddp/controller.py`) backed by that vendor's library.
@@ -162,10 +161,10 @@ the other effects render RGB and refuse a white value, as does an RGB entry.
 
 A controller of type Minleon NDB-Pro (detected from its status model `NDBPRO`, or chosen by hand) gets a second
 device, "<entry> Minleon NDB-Pro", which drives the controller's own built-in effects over its HTTP UI instead of
-sending DDP. Its main entity is the Power switch, named like the device; Color 1 to 5, Mode 1 to 5, and Scene follow,
+sending DDP. Its main entity is the Power switch, named like the device; Color 1 to 5 and Scene follow,
 and Intensity sits under Configuration. Entity IDs below assume the entry is named "NDBPRO" (the title discovery gives it unless the
 controller reports a name), so the entities are `switch.ndbpro_minleon_ndb_pro`, `light.ndbpro_minleon_ndb_pro_color_1`,
-`select.ndbpro_minleon_ndb_pro_mode_1`, `select.ndbpro_minleon_ndb_pro_scene`, `number.ndbpro_minleon_ndb_pro_intensity`, and the DDP lights
+`select.ndbpro_minleon_ndb_pro_scene`, `number.ndbpro_minleon_ndb_pro_intensity`, and the DDP lights
 `light.ndbpro_generic_ddp_output_1` and so on; check yours on the device pages. Entities created by an earlier release
 keep their entity IDs (for example `switch.ndbpro_minleon_ndb_pro_power` and `light.ndbpro_output_1`).
 
@@ -185,25 +184,20 @@ keep their entity IDs (for example `switch.ndbpro_minleon_ndb_pro_power` and `li
   `cool_white` and `warm_white` select the controller's white LEDs (it maps `#feffff` to cool white and pure white to
   warm white); an empty list clears the palette, so the controller picks random colors. Setting colors does not turn
   Power on or take the pixels from a DDP light, and it is not saved to the controller's flash.
-- **Mode 1** to **Mode 5** and **Color 1** to **Color 5** set one palette slot each, read back by the same 30 s poll.
-  Mode is read from the slot: `#c69740` (how the controller reports Warm White once set) or `#ffffff` is Warm White,
-  `#feffff` is Cool White, anything else (an empty slot included) is Color. Choosing Warm White or Cool White sends
-  that white value (`#ffffff` or `#feffff`) at once; choosing Color while the slot holds a white sends the slot's last
-  custom color (the last one seen or set that is neither black nor a white, also after a restart; red by default), and
-  leaves a slot that already holds a color, or is empty, as it is. So an HA scene that restores Mode and Color together
-  never sees a cleared slot.
-- Color N has a Color tab and a Temperature tab, and shows the one its Mode reads. A color sets the slot to it (scaled
-  by a brightness); a temperature sets a white, sent exact: up to 4600 K Warm White (shown as 2700 K), above it Cool
-  White (shown as 6500 K). Off empties the slot (and Mode reads Color again). A bare turn_on re-sends the slot's last
-  color, a white included, also after a restart, red by default. A color of pure white `#ffffff` reads back as Warm
-  White, so the mode follows. Like `ddp.set_colors`, a slot change leaves DDP alone. Upgrading from 0.3: the
-  `Cool White` and `Warm White` effects of Color N are gone; use Mode N or the Temperature tab.
+- **Color 1** to **Color 5** set one palette slot each, read back by the same 30 s poll. A Color N light has a Color
+  tab and a Temperature tab, the white picker; it shows the tab the slot reads: `#c69740` (how the controller reports
+  Warm White once set) or `#ffffff` is Warm White, `#feffff` is Cool White, anything else is a color. A color sets the
+  slot to it (scaled by a brightness); a temperature sets a white, sent exact: up to 4600 K Warm White (shown as
+  2700 K), above it Cool White (shown as 6500 K). Off empties the slot. A bare turn_on re-sends the slot's last color,
+  a white included, also after a restart, red by default. A color of pure white `#ffffff` reads back as Warm White.
+  Like `ddp.set_colors`, a slot change leaves DDP alone. Upgrading from 0.3: the `Cool White` and `Warm White`
+  effects of Color N are gone; use the Temperature tab. Upgrading from 0.4.1: the Mode 1 to 5 selects are removed
+  (Home Assistant drops their entities at setup); the Temperature tab replaces them.
 
 ### Presets
 
-Presets are Home Assistant scenes: a scene that captures Power, Scene, Mode 1 to 5, Color 1 to 5, Intensity, and the
-DDP lights restores the whole look (Mode Color brings the slot's custom color back before Color N sets it, so the
-order the scene applies them in does not matter). The NDB-Pro's 20 stored presets are recall-only, with
+Presets are Home Assistant scenes: a scene that captures Power, Scene, Color 1 to 5, Intensity, and the
+DDP lights restores the whole look (a Color N light sets its slot outright, so the order the scene applies them in does not matter). The NDB-Pro's 20 stored presets are recall-only, with
 `ddp.recall_preset`; the integration never writes the controller's saved settings.
 
 **Segment lights vs. scenes.** DDP data overrides the controller's built-in effect immediately, and about 20 s after DDP
@@ -384,7 +378,7 @@ Red, white, and blue blocks of five pixels on one output, then a moving version 
 | `ddp.recall_preset` | A controller's Power switch | `preset` (1-20; 1-10 are slots of Show 1, 11-20 of Show 2) |
 | `ddp.set_colors` | A controller's Power switch | `colors` (required: 0-5 colors for palette slots 1-5, each `[r, g, b]` 0-255 or `cool_white` / `warm_white`; the remaining slots are emptied, and an empty list lets the controller pick random colors), `background` (`[r, g, b]`; left as it is when omitted) |
 | `light.turn_on` / `light.turn_off` | Any light of this integration | Segment lights: `brightness`, `rgb_color` (`rgbw_color` on an RGBW entry), `effect`. Color 1-5: `rgb_color` and `brightness` (scales the color), or `color_temp_kelvin` (up to 4600 Warm White, above Cool White) |
-| `switch.turn_on` / `switch.turn_off`, `select.select_option`, `number.set_value` | Power, Scene, Mode 1-5, Intensity | Power: none (on is the last scene). Scene: `option` (one of the controller's effects). Mode N: `option` (`color`, `warm_white`, `cool_white`). Intensity: `value` (1-100) |
+| `switch.turn_on` / `switch.turn_off`, `select.select_option`, `number.set_value` | Power, Scene, Intensity | Power: none (on is the last scene). Scene: `option` (one of the controller's effects). Intensity: `value` (1-100) |
 
 `ddp.set_pattern` on a Color light is refused. `ddp.recall_preset` and `ddp.set_colors` act only on a Power switch;
 Home Assistant skips any other target (with a warning in the log). Recalling a preset overwrites the controller's current colors with
@@ -430,8 +424,8 @@ Wi-Fi name are redacted.
 | Lights do not react | Host is right; UDP 4048 is not blocked between Home Assistant and the controller; nothing else is sending DDP to it; the output is patched on the controller. The brightness cap (default 60%) may also make colors dimmer than expected |
 | Colors are wrong (red and green swapped, ...) | Set **Color order** in the options to match the pixels |
 | A solid color turns into the controller's own effect after about 20 s | The keepalive is off or too long; set it to 1 s |
-| Power, Color 1-5, Mode 1-5, Scene, or Intensity are unavailable | The controller's web UI (TCP 80) is not answering. The DDP lights are unaffected; the controller device's entities recover on the next 30 s poll |
-| Color N shows a temperature, not a color | Its Mode is Warm White or Cool White: the slot holds one of the controller's whites. Pick a color, or set Mode to Color to bring back its last custom color |
+| Power, Color 1-5, Scene, or Intensity are unavailable | The controller's web UI (TCP 80) is not answering. The DDP lights are unaffected; the controller device's entities recover on the next 30 s poll |
+| Color N shows a temperature, not a color | The slot holds one of the controller's whites (Warm White or Cool White). Pick a color on its Color tab; the Temperature tab is the white picker |
 | The controller has a new IP address | **Reconfigure** the entry and enter the new host (give the controller a DHCP reservation to avoid this) |
 | `ddp.recall_preset` or `ddp.set_colors` does nothing or is refused | Nothing happens (and the log warns about the target) when the target is not a Power switch, for example a light or a Generic DDP entry, which has none. `ddp.set_colors` refuses more than 5 colors, a component outside 0-255, or a name other than `cool_white` / `warm_white` |
 | `ddp.set_pattern` is refused | The target is a Color light, the effect takes no colors (`rainbow`), or a `params` value is out of range or not a parameter of that effect (the message names it) |

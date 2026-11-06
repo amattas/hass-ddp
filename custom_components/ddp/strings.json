@@ -189,14 +189,6 @@
     "select": {
       "scene": {
         "name": "Scene"
-      },
-      "mode": {
-        "name": "Mode {slot}",
-        "state": {
-          "color": "Color",
-          "warm_white": "Warm White",
-          "cool_white": "Cool White"
-        }
       }
     },
     "switch": {

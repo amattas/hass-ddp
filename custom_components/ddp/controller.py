@@ -31,7 +31,6 @@ EMPTY_COLOR: Final[RGB] = NO_COLOR
 NAMED_COLORS: Final[dict[str, RGB]] = {COLOR_COOL_WHITE: COOL_WHITE, COLOR_WARM_WHITE: WARM_WHITE}
 # What the NDB-Pro's colors page reports for a slot once Warm White is set (it only displays #ffffff that way).
 WARM_WHITE_SHOWN: Final[RGB] = (0xC6, 0x97, 0x40)
-SLOT_WHITES: Final = frozenset({*NAMED_COLORS.values(), WARM_WHITE_SHOWN})  # a slot holding one is in a white mode
 DEFAULT_CUSTOM_COLOR: Final[RGB] = (255, 0, 0)  # a slot's custom color until one is seen: white would be a mode
 
 

@@ -20,7 +20,7 @@ The controller device's Power switch and Scene select run the controller's built
 data overrides those while it flows, so once the controller took the command every DDP light goes to ``scene``
 (sending nothing) and the sender is released (``ControllerCommands``). A poll that finds a scene started or stopped
 outside HA does the same. "Color 1".."Color 5" set one slot each of the palette those effects use, which leaves DDP
-alone (``ddp.set_colors`` on Power sets them all); each slot's "Mode N" select picks a custom color or a white.
+alone (``ddp.set_colors`` on Power sets them all); a Color tab sets a custom color, a Temperature tab one of the whites.
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ from .const import (
     Color,
     LightSource,
 )
-from .controller import DEFAULT_CUSTOM_COLOR, EMPTY_COLOR, PALETTE_SLOTS, SLOT_WHITES
+from .controller import DEFAULT_CUSTOM_COLOR, EMPTY_COLOR, PALETTE_SLOTS
 from .coordinator import SceneState
 from .entity import ControllerEntity, DDPEntity, controller_device_parent, device_identifiers
 
@@ -92,7 +92,6 @@ ATTR_SOURCE = "source"  # restore data: a light that was on showing a scene is n
 ALL_SOURCES = tuple(LightSource)
 COLOR_KEY = "color"  # unique-ID suffix of a palette slot light, with its slot: color_1 .. color_5
 ATTR_LAST_COLOR = "last_color"  # restore data: a palette slot's last color, for a bare turn_on of an empty slot
-ATTR_LAST_CUSTOM = "last_custom"  # restore data: a palette slot's last custom color, for Mode = Color
 # A palette light's Temperature tab: the controller's two whites, warm up to the split, cool above it.
 WARM_WHITE_KELVIN = 2700
 COOL_WHITE_KELVIN = 6500
@@ -653,7 +652,7 @@ def _scaled(color: RGB, brightness: int | None) -> RGB:
 
 class PaletteLight(ControllerEntity, LightEntity, RestoreEntity):
     """One slot of the controller's palette ("Color 1".."Color 5"); off is an empty slot. A Color tab sets a custom
-    color; a Temperature tab sets one of the controller's whites (warm 2700 K, cool 6500 K), the slot's "Mode N"."""
+    color; a Temperature tab sets one of the controller's whites (warm 2700 K, cool 6500 K)."""
 
     _attr_translation_key = "color"
     _attr_color_mode = ColorMode.RGB
@@ -676,21 +675,13 @@ class PaletteLight(ControllerEntity, LightEntity, RestoreEntity):
         await super().async_added_to_hass()
         extra = await self.async_get_last_extra_data()
         stored = extra.as_dict() if extra is not None else {}
-        last_color, last_custom = _rgb(stored.get(ATTR_LAST_COLOR)), _rgb(stored.get(ATTR_LAST_CUSTOM))
-        # A read since startup is newer than what was stored; 0.4.0 stored only the last color.
-        for custom in (last_custom, last_color):
-            if custom is not None and custom != EMPTY_COLOR and custom not in SLOT_WHITES:
-                self.coordinator.last_custom.setdefault(self._slot, custom)
-                break
+        last_color = _rgb(stored.get(ATTR_LAST_COLOR))  # old restore data may carry a ``last_custom`` key: ignored
         if not self._attr_is_on and last_color is not None and last_color != EMPTY_COLOR:
             self._last_color = last_color  # a white too: clearing it, a bare turn_on brings it back
 
     @property
     def extra_restore_state_data(self) -> ExtraStoredData:
-        custom = self.coordinator.last_custom.get(self._slot)
-        return RestoredExtraData(
-            {ATTR_LAST_COLOR: list(self._last_color), ATTR_LAST_CUSTOM: list(custom) if custom is not None else None}
-        )
+        return RestoredExtraData({ATTR_LAST_COLOR: list(self._last_color)})
 
     @callback
     def _handle_coordinator_update(self) -> None:

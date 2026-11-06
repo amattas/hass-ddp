@@ -16,13 +16,6 @@
     "select": {
       "scene": {
         "default": "mdi:movie-open-play"
-      },
-      "mode": {
-        "default": "mdi:palette-outline",
-        "state": {
-          "warm_white": "mdi:white-balance-incandescent",
-          "cool_white": "mdi:white-balance-sunny"
-        }
       }
     },
     "switch": {

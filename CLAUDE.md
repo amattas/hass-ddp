@@ -26,7 +26,7 @@ one registry entry). See `DECISIONS.md`.
   `PLATFORMS` = light, number, select, switch
 - `commands.py`: `ControllerCommands`, the controller commands shared by the controller device's entities (turn on
   with an effect, turn off = the controller's Off plus blanking the DDP-driven segments, recall a preset, set the
-  intensity, the palette or one slot) and the slot-to-mode mapping (Color / Warm White / Cool White). A command that
+  intensity, the palette or one slot). A command that
   starts a scene hands the pixels back from DDP once the controller took it; `follow_poll` (the coordinator's
   `on_poll` hook) does the same for changes made outside HA. Everything runs under the coordinator lock and publishes
   the result
@@ -35,7 +35,7 @@ one registry entry). See `DECISIONS.md`.
   and controller documents
 - `entity.py`: `DDPEntity` base (unique IDs). Two devices per vendor entry: the DDP device `(DOMAIN, host)`, named
   "<title> Generic DDP" (the title alone for Generic), and the controller device `(DOMAIN, host:controller)`, linked
-  by `via_device_id`, for Power, Color/Mode 1-5, Scene and Intensity; `ControllerEntity` is their coordinator-entity
+  by `via_device_id`, for Power, Color 1-5, Scene and Intensity; `ControllerEntity` is their coordinator-entity
   base. `DeviceInfo` is built in one call (since HA 2026.11 it is not a dict)
 - `controller.py`: controller type registry, `Controller` protocol, `detect`, `create_controller`, `fetch_layout`
 - `config_flow.py`: host -> `aioddp.discover` + `detect` -> controller type step (detected preselected, Generic always
@@ -48,7 +48,7 @@ one registry entry). See `DECISIONS.md`.
   each: RGB, or color temperature (2700 K warm, 6500 K cool) while it holds a white. Setup removes any light of the entry it did not create
 - `switch.py`: `PowerSwitch`, the controller device's main entity (no name): on = a scene runs, off = the controller's
   Off; `colors`/`background` attributes, `last_effect` restore, `ddp.recall_preset`, `ddp.set_colors`.
-  `select.py`: `SceneSelect` (the controller's effects without Off) and `ModeSelect` 1-5. `number.py`:
+  `select.py`: `SceneSelect` (the controller's effects without Off). `number.py`:
   `IntensityNumber` (percent, config category)
 - Design spec: `docs/superpowers/specs/2026-10-28-hass-ddp-design.md` (this release is a smaller cut of it)
 

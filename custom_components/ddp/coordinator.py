@@ -16,8 +16,6 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import CONTROLLER_OFF, DOMAIN, RGB
 from .controller import (
     CONTROLLER_ERRORS,
-    EMPTY_COLOR,
-    SLOT_WHITES,
     Controller,
     ControllerPalette,
     ControllerState,
@@ -52,8 +50,6 @@ class DDPScenesCoordinator(DataUpdateCoordinator[SceneState]):
     A failed read raises ``UpdateFailed``, which makes the controller device's entities unavailable and logs once on
     the way down and once on recovery (the coordinator's own behaviour). ``last_effect`` is the last effect other
     than "Off" seen or commanded (a bare turn_on runs it); the Power switch restores it across restarts.
-    ``last_custom`` maps a palette slot (1-based) to the last custom color (neither black nor a white) seen or
-    commanded in it (Mode = Color brings it back); each Color light restores its slot's across restarts.
     """
 
     def __init__(self, hass: HomeAssistant, entry: DDPConfigEntry, controller: Controller) -> None:
@@ -65,7 +61,6 @@ class DDPScenesCoordinator(DataUpdateCoordinator[SceneState]):
         # outside HA reaches the DDP lights before a command can interleave. Commands never call it.
         self.on_poll: Callable[[SceneState | None, SceneState], Awaitable[None]] | None = None
         self.last_effect: str | None = None
-        self.last_custom: dict[int, RGB] = {}
 
     async def _async_update_data(self) -> SceneState:
         async with self.lock:
@@ -100,9 +95,6 @@ class DDPScenesCoordinator(DataUpdateCoordinator[SceneState]):
     def _remember(self, state: SceneState) -> None:
         if state.effect is not None and state.effect != CONTROLLER_OFF:
             self.last_effect = state.effect
-        for slot, color in enumerate(state.colors, start=1):
-            if color != EMPTY_COLOR and color not in SLOT_WHITES:
-                self.last_custom[slot] = color
 
     async def async_read_after_command(self) -> None:
         """Publish what the controller runs now; a failed read marks the entities unavailable. Caller holds ``lock``."""
