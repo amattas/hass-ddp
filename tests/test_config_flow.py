@@ -28,6 +28,7 @@ HOST = "127.0.0.1"
 CONTROLLER_ENTITIES = [
     ("switch", "power"),
     *(("light", f"color_{slot}") for slot in range(1, 6)),
+    *(("select", f"mode_{slot}") for slot in range(1, 6)),
     ("select", "scene"),
     ("number", "intensity"),
 ]

@@ -1,4 +1,5 @@
-"""Commands to a vendor controller, shared by the controller device's entities (Power, Scene, Color 1-5, Intensity).
+"""Commands to a vendor controller, shared by the controller device's entities (Power, Scene, Color/Mode 1-5,
+Intensity).
 
 Every command runs under the coordinator's lock (so a stale poll cannot undo it) and publishes what it changed. A
 command that starts a scene hands the pixels back from DDP once the controller took it: every DDP light shows the
@@ -18,8 +19,8 @@ from typing import TYPE_CHECKING, Any
 from aioddp import DDPError
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
-from .const import CONTROLLER_OFF, DOMAIN, RGB, LightSource
-from .controller import CONTROLLER_ERRORS, EMPTY_COLOR, PALETTE_SLOTS
+from .const import COLOR_COOL_WHITE, COLOR_WARM_WHITE, CONTROLLER_OFF, DOMAIN, RGB, LightSource
+from .controller import CONTROLLER_ERRORS, EMPTY_COLOR, NAMED_COLORS, PALETTE_SLOTS, WARM_WHITE_SHOWN
 from .coordinator import DDPScenesCoordinator, SceneState
 
 if TYPE_CHECKING:
@@ -27,6 +28,24 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 ALL_SOURCES = tuple(LightSource)
+
+# A palette slot's mode ("Mode N"): a custom color, or one of the controller's whites, sent as its exact value.
+MODE_COLOR = "color"
+MODE_WHITES: dict[str, RGB] = {
+    COLOR_WARM_WHITE: NAMED_COLORS[COLOR_WARM_WHITE],
+    COLOR_COOL_WHITE: NAMED_COLORS[COLOR_COOL_WHITE],
+}
+SLOT_MODES = [MODE_COLOR, *MODE_WHITES]
+# What a slot reads back as for each white (Warm White shows as #c69740 once the controller set it).
+_WHITE_READBACK: dict[RGB, str] = {
+    **{color: mode for mode, color in MODE_WHITES.items()},
+    WARM_WHITE_SHOWN: COLOR_WARM_WHITE,
+}
+
+
+def slot_mode(color: RGB) -> str:
+    """The mode of a slot holding ``color``: a white, else ``MODE_COLOR`` (an empty slot included)."""
+    return _WHITE_READBACK.get(color, MODE_COLOR)
 
 
 class ControllerCommands:

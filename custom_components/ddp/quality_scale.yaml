@@ -58,13 +58,13 @@ rules:
     status: done
     comment: |
       Unique IDs are <config entry id>_<segment key>, <config entry id>_strip for All outputs, and on the controller
-      device <config entry id>_power, _color_1 to _color_5, _scene, and _intensity. The controller light
+      device <config entry id>_power, _color_1 to _color_5, _mode_1 to _mode_5, _scene, and _intensity. The controller light
       (<config entry id>_controller) is gone; setup removes its registry entry like any stale light.
   has-entity-name:
     status: done
     comment: |
       DDPEntity sets _attr_has_entity_name; segment lights are named after their output, the Power switch is the
-      controller device's main entity (name None), and All outputs, Color 1-5, Scene, and Intensity are named by
+      controller device's main entity (name None), and All outputs, Color 1-5, Mode 1-5, Scene, and Intensity are named by
       translation.
   runtime-data:
     status: done
@@ -89,7 +89,7 @@ rules:
     status: done
     comment: |
       Failed sends and controller errors raise HomeAssistantError; unknown effects, invalid set_pattern effects or
-      params, an unknown palette white, a remembered scene the controller no longer lists, and set_pattern on a
+      params, a remembered scene the controller no longer lists, and set_pattern on a
       Color light raise ServiceValidationError. recall_preset and set_colors are switch-domain services, so Home
       Assistant only calls them on the Power switch.
   config-entry-unloading:
@@ -134,7 +134,7 @@ rules:
       The DDP device (identifier: host; the output lights and All outputs) with manufacturer, model, and firmware when
       the controller reports them. A vendor controller type adds a controller device (identifier: host:controller,
       named "<entry> <controller type>", via_device_id the DDP device) holding Power (its main entity), Color 1-5,
-      Scene, and Intensity; the DDP device is then named "<entry> Generic DDP".
+      Mode 1-5, Scene, and Intensity; the DDP device is then named "<entry> Generic DDP".
   diagnostics:
     status: done
     comment: Entry, sender counters, scenes state, and the controller's raw documents with host, IPs, MAC, and SSID redacted.
@@ -185,7 +185,8 @@ rules:
   entity-translations:
     status: done
     comment: |
-      All outputs, Color 1-5 ("Color {slot}"), Scene, and Intensity are named by translation; the Power switch takes
+      All outputs, Color 1-5 ("Color {slot}"), Mode 1-5 ("Mode {slot}", options translated), Scene, and Intensity
+      are named by translation; the Power switch takes
       the device's name. Segment lights carry the output label read from the
       controller's layout and stored with the entry (Output 1, All), which is device data rather than a fixed string.
   exception-translations:
@@ -194,7 +195,7 @@ rules:
   icon-translations:
     status: done
     comment: |
-      icons.json has All outputs, Color 1-5, Power, Scene, Intensity, and every action; segment lights use
+      icons.json has All outputs, Color 1-5, Mode 1-5 (per option), Power, Scene, Intensity, and every action; segment lights use
       the default light icon.
   reconfiguration-flow:
     status: done

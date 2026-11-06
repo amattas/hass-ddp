@@ -13,7 +13,7 @@
       },
       "controller": {
         "title": "Controller type",
-        "description": "Detected controller: {detected}. A vendor controller type adds a controller device with a Power switch for the controller's built-in effects and presets, a light per palette color, a Scene select and an Intensity setting. Generic DDP creates only the per-output DDP lights.",
+        "description": "Detected controller: {detected}. A vendor controller type adds a controller device with a Power switch for the controller's built-in effects and presets, a light and a Mode select per palette color, a Scene select and an Intensity setting. Generic DDP creates only the per-output DDP lights.",
         "data": {
           "controller_type": "Controller type"
         },
@@ -189,6 +189,14 @@
     "select": {
       "scene": {
         "name": "Scene"
+      },
+      "mode": {
+        "name": "Mode {slot}",
+        "state": {
+          "color": "Color",
+          "warm_white": "Warm White",
+          "cool_white": "Cool White"
+        }
       }
     },
     "switch": {

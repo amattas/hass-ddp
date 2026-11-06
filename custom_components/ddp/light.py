@@ -20,7 +20,7 @@ The controller device's Power switch and Scene select run the controller's built
 data overrides those while it flows, so once the controller took the command every DDP light goes to ``scene``
 (sending nothing) and the sender is released (``ControllerCommands``). A poll that finds a scene started or stopped
 outside HA does the same. "Color 1".."Color 5" set one slot each of the palette those effects use, which leaves DDP
-alone (``ddp.set_colors`` on Power sets them all).
+alone (``ddp.set_colors`` on Power sets them all); each slot's "Mode N" select picks a custom color or a white.
 """
 
 from __future__ import annotations
@@ -52,13 +52,11 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoredExtraData, RestoreEntity
 
 from . import DDPConfigEntry, DDPRuntime, SegmentConfig
-from .commands import ControllerCommands
+from .commands import MODE_COLOR, MODE_WHITES, ControllerCommands, slot_mode
 from .const import (
     ATTR_BLOCK_SIZE,
     ATTR_COLORS,
     ATTR_PARAMS,
-    COLOR_COOL_WHITE,
-    COLOR_WARM_WHITE,
     CONF_DATA_TYPE,
     CONTROLLER_OFF,
     DATA_TYPE_RGBW,
@@ -71,7 +69,7 @@ from .const import (
     Color,
     LightSource,
 )
-from .controller import EMPTY_COLOR, NAMED_COLORS, PALETTE_SLOTS, WARM_WHITE_SHOWN
+from .controller import EMPTY_COLOR, PALETTE_SLOTS
 from .coordinator import SceneState
 from .entity import ControllerEntity, DDPEntity, controller_device_parent, device_identifiers
 
@@ -83,6 +81,7 @@ PARALLEL_UPDATES = 0
 DEFAULT_BRIGHTNESS = 255
 DEFAULT_RGB: RGB = (255, 255, 255)
 DEFAULT_RGBW: RGBW = (0, 0, 0, 255)  # white on an RGBW strip is its white LEDs alone
+DEFAULT_SLOT_COLOR: RGB = (255, 0, 0)  # a palette slot's first custom color: white would be the Warm White mode
 
 EFFECTS: dict[str, EffectInfo] = {info.name: info for info in list_effects() if info.name != SOLID_EFFECT}
 
@@ -91,16 +90,6 @@ ATTR_SOURCE = "source"  # restore data: a light that was on showing a scene is n
 ALL_SOURCES = tuple(LightSource)
 COLOR_KEY = "color"  # unique-ID suffix of a palette slot light, with its slot: color_1 .. color_5
 ATTR_LAST_COLOR = "last_color"  # restore data: a palette slot's last color, for a bare turn_on of an empty slot
-# The palette lights' effects: the controller's named whites, sent as their exact values.
-PALETTE_EFFECTS: dict[str, RGB] = {
-    "Cool White": NAMED_COLORS[COLOR_COOL_WHITE],
-    "Warm White": NAMED_COLORS[COLOR_WARM_WHITE],
-}
-# What a slot reads back as for each named white (Warm White shows as #c69740 once the controller set it).
-PALETTE_READBACK: dict[RGB, str] = {
-    **{color: name for name, color in PALETTE_EFFECTS.items()},
-    WARM_WHITE_SHOWN: "Warm White",
-}
 COLORS_KIND = "colors"  # aioddp ParamSpec kind of a color-list param
 
 
@@ -655,14 +644,12 @@ def _scaled(color: RGB, brightness: int | None) -> RGB:
 
 
 class PaletteLight(ControllerEntity, LightEntity, RestoreEntity):
-    """One slot of the controller's palette ("Color 1".."Color 5"): off is an empty slot, the effects are the
-    controller's named whites (shown as the effect, not as a color, when the slot reads back as one)."""
+    """One slot of the controller's palette ("Color 1".."Color 5"); off is an empty slot. Its "Mode N" select decides
+    what it is: in Color mode an RGB light, in a white mode an on/off light (on re-sends that white)."""
 
     _attr_translation_key = "color"
     _attr_color_mode = ColorMode.RGB
     _attr_supported_color_modes = {ColorMode.RGB}
-    _attr_supported_features = LightEntityFeature.EFFECT
-    _attr_effect_list = list(PALETTE_EFFECTS)
     _attr_brightness = DEFAULT_BRIGHTNESS  # the slot is a color; a turn_on brightness scales the color sent
 
     def __init__(self, entry: DDPConfigEntry, commands: ControllerCommands, ddp_device_id: str, slot: int) -> None:
@@ -670,7 +657,8 @@ class PaletteLight(ControllerEntity, LightEntity, RestoreEntity):
         self._slot = slot
         self._attr_translation_placeholders = {"slot": str(slot)}
         self._attr_is_on = False
-        self._last_color: RGB = DEFAULT_RGB  # last color other than empty, for a bare turn_on of an empty slot
+        self._mode = MODE_COLOR
+        self._last_color: RGB = DEFAULT_SLOT_COLOR  # last custom color, for a bare turn_on of an empty slot
         if self.scene is not None:
             self._apply(self.scene)
 
@@ -678,8 +666,11 @@ class PaletteLight(ControllerEntity, LightEntity, RestoreEntity):
         await super().async_added_to_hass()
         extra = await self.async_get_last_extra_data()
         stored = _color(extra.as_dict().get(ATTR_LAST_COLOR)) if extra is not None else None
-        if not self._attr_is_on and stored is not None and len(stored) == 3 and stored != EMPTY_COLOR:
-            self._last_color = (stored[0], stored[1], stored[2])
+        if self._attr_is_on or stored is None or len(stored) != 3:
+            return
+        color: RGB = (stored[0], stored[1], stored[2])
+        if color != EMPTY_COLOR and slot_mode(color) == MODE_COLOR:  # a white (from 0.3) is a mode now
+            self._last_color = color
 
     @property
     def extra_restore_state_data(self) -> ExtraStoredData:
@@ -695,23 +686,20 @@ class PaletteLight(ControllerEntity, LightEntity, RestoreEntity):
         if len(state.colors) < self._slot:  # the palette is unknown until it is read
             return
         color = state.colors[self._slot - 1]
+        self._mode = slot_mode(color)
+        custom = self._mode == MODE_COLOR
+        self._attr_color_mode = ColorMode.RGB if custom else ColorMode.ONOFF
+        self._attr_supported_color_modes = {self._attr_color_mode}
         self._attr_is_on = color != EMPTY_COLOR
-        self._attr_rgb_color = color if self._attr_is_on else None
-        self._attr_effect = PALETTE_READBACK.get(color) if self._attr_is_on else None
-        if self._attr_is_on:
-            self._last_color = PALETTE_EFFECTS[self._attr_effect] if self._attr_effect is not None else color
+        self._attr_rgb_color = color if self._attr_is_on and custom else None
+        if self._attr_is_on and custom:
+            self._last_color = color
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """A color (scaled by a brightness), a named white, or (bare) the slot's last color, default white."""
-        effect: str | None = kwargs.get(ATTR_EFFECT)
-        if effect is not None:
-            if effect not in PALETTE_EFFECTS:
-                raise ServiceValidationError(
-                    translation_domain=DOMAIN,
-                    translation_key="unknown_effect",
-                    translation_placeholders={"effect": effect, "effects": ", ".join(PALETTE_EFFECTS)},
-                )
-            color = PALETTE_EFFECTS[effect]  # the exact value the controller maps to its white LEDs
+        """In a white mode, that white (exact); in Color mode a color (scaled by a brightness), or (bare) the slot's
+        last custom color, default red."""
+        if self._mode != MODE_COLOR:
+            color = MODE_WHITES[self._mode]
         else:
             rgb = kwargs.get(ATTR_RGB_COLOR)
             base: RGB = (rgb[0], rgb[1], rgb[2]) if rgb is not None else self._last_color
