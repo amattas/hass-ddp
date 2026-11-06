@@ -54,3 +54,18 @@ set_pattern:
           max: 255
           step: 1
           mode: slider
+set_colors:
+  target:
+    entity:
+      integration: ddp
+      domain: light
+  fields:
+    colors:
+      required: true
+      example: '["warm_white", [255, 0, 0], "warm_white", [255, 0, 0]]'
+      selector:
+        object:
+    background:
+      example: "[0, 0, 0]"
+      selector:
+        color_rgb:

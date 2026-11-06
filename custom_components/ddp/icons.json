@@ -15,6 +15,9 @@
     },
     "set_pattern": {
       "service": "mdi:palette-swatch-variant"
+    },
+    "set_colors": {
+      "service": "mdi:format-color-fill"
     }
   }
 }

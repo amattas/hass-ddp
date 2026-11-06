@@ -125,7 +125,9 @@ rules:
   devices:
     status: done
     comment: |
-      One device per entry (identifier: host) with manufacturer, model, and firmware when the controller reports them.
+      The DDP device (identifier: host; the output lights and All outputs) with manufacturer, model, and firmware when
+      the controller reports them. A vendor controller type adds a controller device (identifier: host:controller,
+      named "<entry> <controller type>", via_device_id the DDP device) holding the Scenes light.
   diagnostics:
     status: done
     comment: Entry, sender counters, scenes state, and the controller's raw documents with host, IPs, MAC, and SSID redacted.
@@ -182,18 +184,21 @@ rules:
   icon-translations:
     status: done
     comment: |
-      icons.json has the Scenes and All outputs lights and both actions; segment lights use the default light icon.
+      icons.json has the Scenes and All outputs lights and every action; segment lights use the default light icon.
   reconfiguration-flow:
     status: done
-    comment: Reconfigure changes the host (moving the device identifier with it) and the controller type.
+    comment: |
+      Reconfigure changes the host (moving both device identifiers with it) and the controller type.
   repair-issues:
     status: exempt
     comment: |
       No user-fixable condition is detected: an unreachable controller is transient and surfaces as an unavailable
       entity, and the layout is not re-read after setup.
   stale-devices:
-    status: exempt
-    comment: Each entry is one fixed controller device that goes away with the entry.
+    status: done
+    comment: |
+      Reconfiguring to Generic DDP removes the controller device with its Scenes light; the DDP device goes away with
+      the entry.
 
   # Platinum
   async-dependency:

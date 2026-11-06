@@ -18,6 +18,7 @@ from homeassistant.helpers import service
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
+    ATTR_BACKGROUND,
     ATTR_BLOCK_SIZE,
     ATTR_COLORS,
     ATTR_PARAMS,
@@ -45,9 +46,10 @@ from .const import (
     SEGMENT_NAME,
     SEGMENT_START,
     SERVICE_RECALL_PRESET,
+    SERVICE_SET_COLORS,
     SERVICE_SET_PATTERN,
 )
-from .controller import Controller, create_controller, type_for_model
+from .controller import NAMED_COLORS, PALETTE_SLOTS, Controller, create_controller, type_for_model
 from .coordinator import DDPScenesCoordinator
 
 if TYPE_CHECKING:
@@ -57,6 +59,9 @@ PLATFORMS: list[Platform] = [Platform.LIGHT]
 CONFIG_VERSION = 2  # the config flow's VERSION
 
 _BYTE = probatio.All(probatio.Coerce(int), probatio.Range(min=0, max=255))
+_RGB = probatio.All(probatio.ExactSequence([_BYTE, _BYTE, _BYTE]), probatio.Coerce(tuple))
+# A palette color: [r, g, b] or the name of one of the controller's whites.
+_PALETTE_COLOR = probatio.Any(_RGB, probatio.All(probatio.In(NAMED_COLORS), NAMED_COLORS.__getitem__))
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,6 +167,17 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             probatio.Optional(ATTR_BRIGHTNESS): probatio.All(probatio.Coerce(int), probatio.Range(min=1, max=255)),
         },
         func="async_set_pattern",
+    )
+    service.async_register_platform_entity_service(
+        hass,
+        DOMAIN,
+        SERVICE_SET_COLORS,
+        entity_domain=LIGHT_DOMAIN,
+        schema={
+            probatio.Required(ATTR_COLORS): probatio.All([_PALETTE_COLOR], probatio.Length(max=PALETTE_SLOTS)),
+            probatio.Optional(ATTR_BACKGROUND): _RGB,
+        },
+        func="async_set_colors",
     )
     return True
 

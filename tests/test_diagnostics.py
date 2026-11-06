@@ -46,6 +46,8 @@ async def test_diagnostics_redacts_identifying_data(
     assert diagnostics["runners"] == []
     if variant == "ndbpro":
         assert diagnostics["scenes"]["effect"] == "Glow"
+        assert diagnostics["scenes"]["colors"] == [[0xBE, 0x38, 0xF3]] + [[0, 0, 0]] * 4
+        assert diagnostics["scenes"]["background"] == [0, 0, 0]
         controller = diagnostics["controller"]
         status, config = controller["status"]["status"], controller["config"]["config"]
         assert status["mac"] == config["ssid"] == config["ip"] == config["gw"] == REDACTED

@@ -96,6 +96,7 @@ async def udp_listener(socket_enabled: None) -> AsyncIterator[Listener]:
 FIXTURES = Path(__file__).parent / "fixtures" / "ndbpro"
 _EFFECT_BUTTON = re.compile(r"""class='(?:psel|pnsel) button' onclick='fx2b\("([^"]+)",""")
 _INTENSITY_VALUE = re.compile(r"(class='slider Cint' value=')\d+(')")
+_COLOR_CELL = "<td id='bc{}' bgcolor=\"#{}\">"
 
 
 @dataclass
@@ -123,6 +124,13 @@ class FakeController:
             self.pages["/pfx2.html"],
         )
 
+    def set_color(self, slot: int, color: str) -> None:
+        """Show ``color`` (``#rrggbb``) in palette cell ``slot`` (6 is the background), as the colors page does."""
+        page = self.pages["/pcolors.html"]
+        self.pages["/pcolors.html"] = re.sub(
+            rf"<td id='bc{slot}' bgcolor=\"#[0-9a-fA-F]{{6}}\">", _COLOR_CELL.format(slot, color.lstrip("#")), page
+        )
+
     def commands(self) -> list[tuple[str, str, bytes]]:
         """Every request except the page reads a poll makes."""
         return [r for r in self.requests if not (r[0] == "GET" and r[1] in ("/pfx2.html", "/pcolors.html"))]
@@ -145,6 +153,8 @@ class FakeController:
                 command = json.loads(body)
                 if "fx" in command:
                     self.select(command["fx"])
+                if "color" in command:
+                    self.set_color(command["color"]["i"], command["color"]["c"])
                 if "int" in command:
                     self.pages["/pcolors.html"] = _INTENSITY_VALUE.sub(
                         rf"\g<1>{int(command['int'])}\g<2>", self.pages["/pcolors.html"]

@@ -115,6 +115,9 @@
     },
     "invalid_effect_params": {
       "message": "Invalid pattern for effect {effect}: {error}"
+    },
+    "palette_not_a_controller": {
+      "message": "{entity} is not a controller Scenes light; set_colors works only on a Scenes light."
     }
   },
   "services": {
@@ -151,6 +154,20 @@
         "brightness": {
           "name": "Brightness",
           "description": "Brightness from 1 to 255. Leave empty to keep the light's brightness."
+        }
+      }
+    },
+    "set_colors": {
+      "name": "Set colors",
+      "description": "Sets the colors the controller's built-in effects use (its palette of 5 custom colors), on a controller Scenes light. The light need not be on, and DDP lights keep the pixels. No colors clears the palette, so the controller picks random colors.",
+      "fields": {
+        "colors": {
+          "name": "Colors",
+          "description": "0 to 5 colors for palette slots 1 to 5; the remaining slots are emptied. Each is a list of red, green, blue from 0 to 255, or cool_white or warm_white for the controller's white LEDs, for example [\"warm_white\", [255, 0, 0]]. An empty list clears the palette, so the controller picks random colors."
+        },
+        "background": {
+          "name": "Background",
+          "description": "The background color as red, green, blue from 0 to 255, for effects that use one. Leave empty to keep it."
         }
       }
     }

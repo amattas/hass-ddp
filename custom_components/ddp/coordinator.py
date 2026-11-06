@@ -12,8 +12,8 @@ from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
-from .const import DOMAIN
-from .controller import CONTROLLER_ERRORS, Controller, ControllerState
+from .const import DOMAIN, RGB
+from .controller import CONTROLLER_ERRORS, Controller, ControllerPalette, ControllerState
 
 if TYPE_CHECKING:
     from . import DDPConfigEntry
@@ -25,11 +25,17 @@ SCAN_INTERVAL = timedelta(seconds=30)  # one cheap local HTTP read; the controll
 
 @dataclass(frozen=True, slots=True)
 class SceneState:
-    """What the controller's built-in effect engine is doing: ``effect`` is ``None`` when unknown."""
+    """What the controller's built-in effect engine is doing: ``effect`` is ``None`` when unknown.
+
+    ``colors`` are the palette's slots (``EMPTY_COLOR`` for an empty one); the palette is unknown (``()`` and
+    ``None``) only when a command lands before the first successful read.
+    """
 
     effect: str | None
     intensity: int | None  # percent
     effects: tuple[str, ...]
+    colors: tuple[RGB, ...] = ()
+    background: RGB | None = None
 
 
 class DDPScenesCoordinator(DataUpdateCoordinator[SceneState]):
@@ -50,16 +56,19 @@ class DDPScenesCoordinator(DataUpdateCoordinator[SceneState]):
             return await self.read()
 
     async def read(self) -> SceneState:
-        """Read the controller's state. Callers sending commands hold ``lock``."""
+        """Read the controller's state and palette. Callers sending commands hold ``lock``."""
         try:
             state: ControllerState = await self.controller.state()
+            palette: ControllerPalette = await self.controller.palette()
         except CONTROLLER_ERRORS as err:
             raise UpdateFailed(
                 translation_domain=DOMAIN,
                 translation_key="controller_unreachable",
                 translation_placeholders={"host": self._host, "error": str(err)},
             ) from err
-        return SceneState(state.effect, state.intensity, tuple(state.effects))
+        return SceneState(
+            state.effect, state.intensity, tuple(state.effects), tuple(palette.colors), palette.background
+        )
 
     def publish(self, data: SceneState) -> None:
         """Set the data from a command; if the last poll had failed, log the recovery a successful poll would."""

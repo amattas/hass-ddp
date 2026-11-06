@@ -13,9 +13,9 @@ from typing import Any, Final, Protocol
 
 from aioddp import ControllerLayout, DDPError, parse_config
 from homeassistant.exceptions import ConfigEntryError
-from pyminleon import MinleonError, NDBController, identify
+from pyminleon import COOL_WHITE, NO_COLOR, PALETTE_SIZE, WARM_WHITE, MinleonError, NDBController, identify
 
-from .const import DEFAULT_HTTP_PORT, DOMAIN
+from .const import COLOR_COOL_WHITE, COLOR_WARM_WHITE, DEFAULT_HTTP_PORT, DOMAIN, RGB
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -24,6 +24,11 @@ TYPE_NDBPRO: Final = "ndbpro"
 
 # What vendor controller libraries raise for any runtime failure (unreachable, timeout, unreadable answer).
 CONTROLLER_ERRORS: Final = (MinleonError,)
+
+# The controller palette: PALETTE_SIZE custom color slots, EMPTY_COLOR marking an empty one.
+PALETTE_SLOTS: Final = PALETTE_SIZE
+EMPTY_COLOR: Final[RGB] = NO_COLOR
+NAMED_COLORS: Final[dict[str, RGB]] = {COLOR_COOL_WHITE: COOL_WHITE, COLOR_WARM_WHITE: WARM_WHITE}
 
 
 class ControllerState(Protocol):
@@ -35,6 +40,15 @@ class ControllerState(Protocol):
     def intensity(self) -> int | None: ...  # percent
     @property
     def effects(self) -> Sequence[str]: ...
+
+
+class ControllerPalette(Protocol):
+    """The colors the controller's built-in effects use: ``PALETTE_SLOTS`` slots and the background."""
+
+    @property
+    def colors(self) -> Sequence[RGB]: ...  # EMPTY_COLOR for an empty slot
+    @property
+    def background(self) -> RGB: ...
 
 
 class ControllerPreset(Protocol):
@@ -55,6 +69,8 @@ class Controller(Protocol):
     async def presets(self) -> Sequence[ControllerPreset]: ...
     async def set_effect(self, name: str) -> None: ...
     async def set_intensity(self, percent: int) -> None: ...
+    async def palette(self) -> ControllerPalette: ...
+    async def set_palette(self, colors: Sequence[RGB], *, background: RGB | None = None) -> None: ...
     async def recall_preset(self, slot: int) -> None: ...
     async def config(self) -> dict[str, Any]: ...  # raw documents, for diagnostics
     async def status(self) -> dict[str, Any]: ...

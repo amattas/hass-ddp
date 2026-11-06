@@ -8,8 +8,9 @@ Ownership: lights whose pixels overlap (All outputs and each output) take the pi
 stops the overlapping lights' runners and shows them off without sending anything, exactly like a hand-back to the
 controller; the pixels then show only the light that was turned on, where it covers them.
 
-The Scenes light selects the controller's built-in effects and stored presets; DDP data overrides those while it
-flows, so it turns every DDP light off (without blanking) and releases the sender before commanding the controller.
+The Scenes light (on the controller device) selects the controller's built-in effects and stored presets; DDP data
+overrides those while it flows, so it turns every DDP light off (without blanking) and releases the sender before
+commanding the controller. It also sets the palette those effects use (``ddp.set_colors``), which leaves DDP alone.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from aioddp import DDPError, EffectInfo, EffectRunner, Segment, get_effect, list_effects, validate_params
@@ -31,19 +32,30 @@ from homeassistant.components.light.const import (
     LightEntityFeature,
 )
 from homeassistant.components.light.const import DOMAIN as LIGHT_DOMAIN
-from homeassistant.const import STATE_ON
+from homeassistant.const import CONF_HOST, STATE_ON
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoredExtraData, RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import DDPConfigEntry, DDPRuntime, SegmentConfig
-from .const import ATTR_BLOCK_SIZE, ATTR_COLORS, ATTR_PARAMS, DOMAIN, PATTERN_EFFECT, SOLID_EFFECT, STRIP_KEY
-from .controller import CONTROLLER_ERRORS
+from .const import (
+    ATTR_BACKGROUND,
+    ATTR_BLOCK_SIZE,
+    ATTR_COLORS,
+    ATTR_PARAMS,
+    DOMAIN,
+    PATTERN_EFFECT,
+    RGB,
+    SOLID_EFFECT,
+    STRIP_KEY,
+)
+from .controller import CONTROLLER_ERRORS, EMPTY_COLOR, PALETTE_SLOTS
 from .coordinator import DDPScenesCoordinator, SceneState
-from .entity import DDPEntity
+from .entity import DDPEntity, ddp_device_info, device_identifiers
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,9 +63,7 @@ _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
 
 DEFAULT_BRIGHTNESS = 255
-DEFAULT_RGB: tuple[int, int, int] = (255, 255, 255)
-
-type RGB = tuple[int, int, int]
+DEFAULT_RGB: RGB = (255, 255, 255)
 
 EFFECTS: dict[str, EffectInfo] = {info.name: info for info in list_effects() if info.name != SOLID_EFFECT}
 
@@ -127,12 +137,18 @@ async def async_setup_entry(
     runtime.segment_lights = lights
     async_add_entities(lights)
     if runtime.scenes is None:
-        # Switched to Generic DDP: drop the Scenes entity the previous type registered.
+        # Switched to Generic DDP: drop the Scenes entity and the controller device the previous type registered.
         registry = er.async_get(hass)
         if stale := registry.async_get_entity_id(LIGHT_DOMAIN, DOMAIN, f"{entry.entry_id}_{SCENES_KEY}"):
             registry.async_remove(stale)
+        devices = dr.async_get(hass)
+        _, controller = device_identifiers(entry.data[CONF_HOST])
+        if stale_device := devices.async_get_device_by_identifier(controller, entry.entry_id):
+            devices.async_remove_device(stale_device.id)
         return
-    async_add_entities([ScenesLight(entry, runtime.scenes)])
+    # The controller device is connected through the DDP device, so that one has to exist first.
+    ddp_device = dr.async_get(hass).async_get_or_create(config_entry_id=entry.entry_id, **ddp_device_info(entry))
+    async_add_entities([ScenesLight(entry, runtime.scenes, ddp_device.id)])
 
 
 def _rgb(value: object) -> RGB | None:
@@ -377,16 +393,19 @@ def _to_intensity(brightness: int) -> int:
 
 
 class ScenesLight(CoordinatorEntity[DDPScenesCoordinator], DDPEntity, LightEntity, RestoreEntity):
-    """A vendor controller's built-in effects (stored shows included). The controller is the truth; it is polled."""
+    """A vendor controller's built-in effects (stored shows included) and their palette, on the controller device.
+
+    The controller is the truth; it is polled. The palette shows as the ``colors`` and ``background`` attributes.
+    """
 
     _attr_translation_key = "scenes"
     _attr_color_mode = ColorMode.BRIGHTNESS
     _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
     _attr_supported_features = LightEntityFeature.EFFECT
 
-    def __init__(self, entry: DDPConfigEntry, coordinator: DDPScenesCoordinator) -> None:
+    def __init__(self, entry: DDPConfigEntry, coordinator: DDPScenesCoordinator, ddp_device_id: str) -> None:
         CoordinatorEntity.__init__(self, coordinator)
-        DDPEntity.__init__(self, entry, SCENES_KEY)
+        DDPEntity.__init__(self, entry, SCENES_KEY, ddp_device_id=ddp_device_id)
         self._runtime: DDPRuntime = entry.runtime_data
         self._attr_is_on = False
         self._last_effect: str | None = None  # last effect other than "Off", seen or commanded
@@ -419,17 +438,15 @@ class ScenesLight(CoordinatorEntity[DDPScenesCoordinator], DDPEntity, LightEntit
         self._attr_effect = state.effect if self._attr_is_on else None
         if self._attr_is_on:
             self._last_effect = state.effect
+        if state.background is not None:
+            self._attr_extra_state_attributes = {
+                ATTR_COLORS: [list(color) for color in state.colors],
+                ATTR_BACKGROUND: list(state.background),
+            }
 
-    def _publish(self, effect: str | None, intensity: int | None = None) -> None:
-        """Publish a commanded state as the coordinator's data, keeping the effect list and unchanged intensity."""
-        known = self.coordinator.data
-        self.coordinator.publish(
-            SceneState(
-                effect,
-                intensity if intensity is not None else (known.intensity if known else None),
-                known.effects if known else (),
-            )
-        )
+    def _publish(self, **changes: Any) -> None:
+        """Publish a commanded change as the coordinator's data, keeping everything the command did not change."""
+        self.coordinator.publish(replace(self.coordinator.data or SceneState(None, None, ()), **changes))
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         effects = self.effect_list or []
@@ -449,7 +466,10 @@ class ScenesLight(CoordinatorEntity[DDPScenesCoordinator], DDPEntity, LightEntit
             except CONTROLLER_ERRORS as err:
                 raise self._controller_error(err) from err
             await self._hand_back()  # only once the controller took the command, so a failure keeps the DDP look
-            self._publish(effect, _to_intensity(brightness) if brightness is not None else None)
+            if brightness is None:
+                self._publish(effect=effect)
+            else:
+                self._publish(effect=effect, intensity=_to_intensity(brightness))
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Fully dark: blank any DDP segment that is on, then select the controller's "Off"."""
@@ -465,7 +485,7 @@ class ScenesLight(CoordinatorEntity[DDPScenesCoordinator], DDPEntity, LightEntit
                 await self.coordinator.controller.set_effect(CONTROLLER_OFF)
             except CONTROLLER_ERRORS as err:
                 raise self._controller_error(err) from err
-            self._publish(CONTROLLER_OFF)
+            self._publish(effect=CONTROLLER_OFF)
         if segment_error is not None:
             raise segment_error
 
@@ -478,6 +498,22 @@ class ScenesLight(CoordinatorEntity[DDPScenesCoordinator], DDPEntity, LightEntit
                 raise self._controller_error(err) from err
             await self._hand_back()
             await self.coordinator.async_read_after_command()
+
+    async def async_set_colors(self, colors: Sequence[RGB], background: RGB | None = None) -> None:
+        """Make the palette exactly ``colors`` (the other slots empty; none: the controller picks random colors).
+
+        The palette is the controller's own setting, so DDP keeps the pixels and the light need not be on.
+        """
+        async with self.coordinator.lock:
+            try:
+                await self.coordinator.controller.set_palette(colors, background=background)
+            except CONTROLLER_ERRORS as err:
+                raise self._controller_error(err) from err
+            slots = (*colors, *[EMPTY_COLOR] * (PALETTE_SLOTS - len(colors)))
+            if background is None:
+                self._publish(colors=slots)
+            else:
+                self._publish(colors=slots, background=background)
 
     async def _hand_back(self) -> None:
         """Turn every DDP light off without sending, and stop keepalive, so DDP stops overriding the controller."""

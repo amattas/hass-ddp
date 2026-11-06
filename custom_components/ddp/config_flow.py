@@ -54,6 +54,7 @@ from .const import (
     SEGMENT_START,
 )
 from .controller import CONTROLLER_TYPES, TYPE_GENERIC, detect, fetch_layout
+from .entity import device_identifiers
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -186,12 +187,14 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
                 await self.async_set_unique_id(host)
                 self._abort_if_unique_id_configured()
                 if not (error := await _check_socket(host, entry.data[CONF_PIXEL_COUNT], entry.data[CONF_DATA_TYPE])):
-                    # Unique IDs of the entities are keyed by the entry, so only the device identity follows the host.
+                    # Unique IDs of the entities are keyed by the entry, so only the devices' identities follow the
+                    # host: the DDP device and, for a vendor controller type, the controller device.
                     registry = dr.async_get(self.hass)
-                    if device := registry.async_get_device_by_identifier(
-                        (DOMAIN, entry.data[CONF_HOST]), entry.entry_id
+                    for old, new in zip(
+                        device_identifiers(entry.data[CONF_HOST]), device_identifiers(host), strict=True
                     ):
-                        registry.async_update_device(device.id, new_identifiers={(DOMAIN, host)})
+                        if device := registry.async_get_device_by_identifier(old, entry.entry_id):
+                            registry.async_update_device(device.id, new_identifiers={new})
                 else:
                     errors["base"] = error
             if not errors:

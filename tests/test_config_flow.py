@@ -23,6 +23,7 @@ from custom_components.ddp.const import DOMAIN
 from .conftest import FakeController
 
 HOST = "127.0.0.1"
+SCENES = "light.ndb_pro_minleon_ndb_pro_scenes"
 DISCOVER = "custom_components.ddp.config_flow.discover"
 OPEN = "custom_components.ddp.config_flow.DDPSender.open"
 
@@ -252,6 +253,7 @@ async def test_options_color_orders_follow_data_type(
 async def test_reconfigure_changes_controller_type_and_reloads(
     hass: HomeAssistant,
     entity_registry: er.EntityRegistry,
+    device_registry: dr.DeviceRegistry,
     flow_controller: FakeController,
     entry_factory: Callable[..., MockConfigEntry],
     current: str,
@@ -261,7 +263,11 @@ async def test_reconfigure_changes_controller_type_and_reloads(
     entry = entry_factory(controller=flow_controller, controller_type=current)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert (entity_registry.async_get("light.ndb_pro_scenes") is not None) == (current == "ndbpro")
+    assert (entity_registry.async_get(SCENES) is not None) == (current == "ndbpro")
+    controller_device = (DOMAIN, f"{HOST}:controller")
+    assert (device_registry.async_get_device_by_identifier(controller_device, entry.entry_id) is not None) == (
+        current == "ndbpro"
+    )
 
     result = await entry.start_reconfigure_flow(hass)
     assert result["step_id"] == "reconfigure"
@@ -276,7 +282,12 @@ async def test_reconfigure_changes_controller_type_and_reloads(
     assert entry.data["controller_type"] == target
     assert entry.state is ConfigEntryState.LOADED
     assert (entry.runtime_data.controller is not None) == (target == "ndbpro")
-    assert (entity_registry.async_get("light.ndb_pro_scenes") is not None) == (target == "ndbpro")
+    assert (entity_registry.async_get(SCENES) is not None) == (target == "ndbpro")
+    # Switching to Generic removes the controller device with its Scenes light; the DDP device stays.
+    assert (device_registry.async_get_device_by_identifier(controller_device, entry.entry_id) is not None) == (
+        target == "ndbpro"
+    )
+    assert device_registry.async_get_device_by_identifier((DOMAIN, HOST), entry.entry_id) is not None
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -307,8 +318,11 @@ async def test_reconfigure_changes_host_and_keeps_the_device(
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     registry = dr.async_get(hass)
-    device = registry.async_get_device_by_identifier((DOMAIN, HOST), entry.entry_id)
-    assert device is not None
+    devices = {
+        suffix: registry.async_get_device_by_identifier((DOMAIN, f"{HOST}{suffix}"), entry.entry_id)
+        for suffix in ("", ":controller")
+    }
+    assert None not in devices.values()
     if other_entry:
         MockConfigEntry(domain=DOMAIN, unique_id="127.0.0.2", data={"host": "127.0.0.2"}).add_to_hass(hass)
 
@@ -329,8 +343,10 @@ async def test_reconfigure_changes_host_and_keeps_the_device(
         assert entry.data["host"] == ("127.0.0.2" if moved else HOST)
         assert entry.unique_id == ("127.0.0.2" if moved else HOST)
         assert entry.title == ("127.0.0.2" if moved and title == HOST else title)  # follows only an untouched title
-        assert (registry.async_get_device_by_identifier((DOMAIN, "127.0.0.2"), entry.entry_id) is not None) == moved
-        if moved:
-            assert registry.async_get_device_by_identifier((DOMAIN, "127.0.0.2"), entry.entry_id).id == device.id  # type: ignore[union-attr]
-            assert registry.async_get_device_by_identifier((DOMAIN, HOST), entry.entry_id) is None
+        # Both devices (the DDP device and the controller device) follow the host, keeping their IDs.
+        for suffix, device in devices.items():
+            new = registry.async_get_device_by_identifier((DOMAIN, f"127.0.0.2{suffix}"), entry.entry_id)
+            old = registry.async_get_device_by_identifier((DOMAIN, f"{HOST}{suffix}"), entry.entry_id)
+            ids = (new.id if new else None, old.id if old else None)
+            assert ids == ((device.id, None) if moved else (None, device.id))  # type: ignore[union-attr]
     assert await hass.config_entries.async_unload(entry.entry_id)
