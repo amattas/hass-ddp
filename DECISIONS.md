@@ -140,3 +140,7 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
   the white picker, and its Color tab a custom color, so a separate mode is redundant. The select platform removes
   the stale `mode_N` entities at setup. `last_custom` and the Mode = Color restore logic go with them; a bare
   turn_on still restores the slot's last value.
+- 0.4.2 (cont.): the Intensity number goes too. The controller device's main entity is a brightness-only `light`
+  (on/off = the controller's Power, brightness = its intensity, no effects), replacing the Power switch; the
+  controller entities are that light, Color 1..5 and Scene. `ddp.recall_preset` / `ddp.set_colors` target the light
+  again. Stale switch/number entities are removed at setup.
