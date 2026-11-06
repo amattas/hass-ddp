@@ -124,3 +124,8 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
   attributes move to it. The Scene select keeps leaving the controller's "Off" out so Power on restores the last scene.
 - The old controller light entity (`<entry>_controller`) is removed at setup like other stale entities; automations
   that targeted it must move to the Power switch or the Scene select.
+- Palette slots get a `select` "Mode N" (Color / Warm White / Cool White) next to "Color N". Mode is read from the
+  slot: #c69740 or #ffffff = Warm White, #feffff = Cool White, anything else (black included) = Color. Choosing a
+  white sends it at once; choosing Color clears the slot (black: the light shows off, pick a color to set it). While
+  the mode is a white, Color N is an on/off light (no color picker; off clears the slot, on re-sends the white);
+  while Color, it is an RGB light. The Warm/Cool White effects on Color N are gone; `ddp.set_colors` keeps the names.
