@@ -42,9 +42,16 @@ and reloading or removing the integration never blanks the lights.
 
 ## Reconfigure
 
-**Reconfigure** on the integration entry changes the host (for example after a new DHCP lease) or the controller type;
-the entry reloads and keeps its device, entities, and history. Choosing Generic DDP removes the Scenes light. The
-pixel layout is not re-read: to change it, remove and re-add the entry.
+**Reconfigure** on the integration entry changes the host (for example after a new DHCP lease) or the controller type,
+and re-reads the output layout the same way adding does (a DDP query, then the controller type's own API). The form
+shows the stored pixel type and the layout the controller reports now. When it reports one, the entry stores its
+pixel type (RGB or RGBW), outputs, and pixel count; so after switching an NDB-Pro between a 3-channel and a 4-channel
+input mode, reconfigure the entry to follow it. Outputs that are still there keep their lights; an output that is gone
+loses its light (and with a single output left, All outputs goes too). A color order option that does not fit the new
+pixel type is reset to the default. When the controller reports no layout, the stored one is kept.
+
+The entry reloads and keeps its devices, entities, and history. Choosing Generic DDP removes the controller device and
+its Scenes light.
 
 ## Removal
 
