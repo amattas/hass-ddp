@@ -43,3 +43,20 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
   is UI only); pyminleon exposes both as constants and hass-ddp as the named colors `warm_white` / `cool_white`.
   Light setup removes any light of the entry it did not create (dropped output, All outputs with one segment left,
   Scenes on Generic). A pattern color with W is refused before aioddp sees it on an RGB entry or a non-RGBW effect.
+
+## 2026-11-06: DDP lights reflect a running controller scene
+
+- Field test: while a controller scene ran, the DDP lights (Output 1/2, All outputs) showed off because they only
+  ever showed what HA sent over DDP. Decided: they reflect the scene. Each DDP light has a source: `off`, `ddp`
+  (HA drives it), `scene` (the controller's effect lights it; nothing is sent) or `blanked` (a scene runs but this
+  light was turned off: black is sent and held for its pixels). `is_on` is `ddp` or `scene`.
+- Scene on (HA command or poll): `off` and `ddp` lights become `scene` (DDP stops, as before). Scene off from HA: every
+  DDP light goes off (as before). Scene off seen by a poll: `scene`/`blanked` lights go off, `ddp` lights keep running.
+- Turning a `scene` light off blanks just its pixels and holds them (per-output disable); a bare turn_on hands the
+  pixels back to the scene by releasing them, so the controller resumes there after its ~20 s DDP timeout. Any
+  turn_on with a color, effect or pattern takes the light to `ddp` as before.
+- aioddp keepalive now resends only held byte ranges and `release(segment)` drops one range, so blanking one output
+  never overrides the scene on another. `release_if_idle` is replaced by per-segment release.
+- Not verified on hardware yet: whether the NDB-Pro keeps its effect running on outputs DDP is not writing to. If it
+  does not, per-output disable freezes the other output; the README says so until the field test settles it.
+- Restart: `blanked` is not restored; after the first poll a running scene shows every idle DDP light as `scene`.
