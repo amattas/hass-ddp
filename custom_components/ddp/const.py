@@ -71,3 +71,5 @@ COLOR_WARM_WHITE: Final = "warm_white"
 CONTROLLER_DEVICE_SUFFIX: Final = ":controller"
 
 type RGB = tuple[int, int, int]
+type RGBW = tuple[int, int, int, int]
+type Color = RGB | RGBW  # RGBW only on an entry whose data type is rgbw

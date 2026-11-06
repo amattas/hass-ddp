@@ -93,8 +93,8 @@ class ControllerType:
 
 async def _ndbpro_layout(host: str, http_port: int) -> ControllerLayout | None:
     """The NDB-Pro serves the DDP config and status documents over HTTP; it ignores the DDP query."""
-    ctl = NDBController(host, port=http_port)
     try:
+        ctl = NDBController(host, port=http_port)  # raises for a host the library rejects
         return parse_config(await ctl.config(), host=host, source="http", status=await ctl.status())
     except (*CONTROLLER_ERRORS, DDPError) as err:
         _LOGGER.debug("no HTTP layout from %s: %s", host, err)

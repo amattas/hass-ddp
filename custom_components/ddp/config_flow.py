@@ -71,6 +71,9 @@ MANUAL_SCHEMA = probatio.Schema(
 )
 
 CONTROLLER_PLACEHOLDER = "detected"
+DATA_TYPE_PLACEHOLDER = "data_type"
+LAYOUT_PLACEHOLDER = "layout"
+NO_LAYOUT = "none"  # the layout placeholder when the controller reports no usable layout
 
 
 def _controller_selector() -> SelectSelector:
@@ -101,6 +104,52 @@ async def _check_socket(host: str, pixel_count: int, data_type: str) -> str | No
     return None
 
 
+async def _read_layout(host: str, controller_type: str, http_port: int) -> ControllerLayout | None:
+    """The layout over DDP, else over the controller type's own API; ``None`` if neither gives one."""
+    try:
+        layout = await discover(host)
+    except DDPError as err:
+        _LOGGER.debug("discovery of %s failed: %s", host, err)
+        layout = None
+    if layout is None:  # the controller may serve its layout over its own API instead
+        layout = await fetch_layout(controller_type, host, http_port)
+    return layout
+
+
+def _layout_data(layout: ControllerLayout | None) -> dict[str, Any] | None:
+    """Entry data for a usable layout (a drivable data type and active outputs), else ``None``.
+
+    Segment keys are the layout's segment names, so an output that stays keeps its entity's unique ID.
+    """
+    if layout is None or layout.data_type is None or not layout.active_outputs:
+        return None
+    segments = [
+        {
+            SEGMENT_KEY: segment.name,
+            SEGMENT_NAME: f"Output {output.index + 1}",
+            SEGMENT_START: segment.start,
+            SEGMENT_LENGTH: segment.length,
+        }
+        for output, segment in zip(layout.active_outputs, layout.segments(), strict=True)
+    ]
+    return {
+        CONF_PIXEL_COUNT: layout.pixel_count,
+        CONF_DATA_TYPE: DATA_TYPE_RGBW if layout.data_type is DataType.RGBW else DATA_TYPE_RGB,
+        CONF_SEGMENTS: segments,
+        CONF_MANUFACTURER: layout.manufacturer,
+        CONF_MODEL: layout.model,
+        CONF_FIRMWARE: layout.firmware,
+    }
+
+
+def _describe(data: dict[str, Any] | None) -> str:
+    """The reconfigure form's summary of a layout read from the controller."""
+    if data is None:
+        return NO_LAYOUT
+    outputs = len(data[CONF_SEGMENTS])
+    return f"{data[CONF_DATA_TYPE]}, {outputs} output{'s' if outputs != 1 else ''}, {data[CONF_PIXEL_COUNT]} pixels"
+
+
 def _title(layout: ControllerLayout, host: str) -> str:
     status = layout.status or {}
     name = status.get("name")
@@ -126,14 +175,8 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
             await self.async_set_unique_id(host)
             self._abort_if_unique_id_configured()
             self._host = host
-            try:
-                self._layout = await discover(host)
-            except DDPError as err:
-                _LOGGER.debug("discovery of %s failed: %s", host, err)
-                self._layout = None
             self._detected = await detect(host, DEFAULT_HTTP_PORT)
-            if self._layout is None:  # the controller may serve its layout over its own API instead
-                self._layout = await fetch_layout(self._detected, host, DEFAULT_HTTP_PORT)
+            self._layout = await _read_layout(host, self._detected, DEFAULT_HTTP_PORT)
             return await self.async_step_controller()
         return self.async_show_form(step_id="user", data_schema=USER_SCHEMA)
 
@@ -143,31 +186,12 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             self._controller_type = user_input[CONF_CONTROLLER_TYPE]
             layout = self._layout
-            if layout is None or layout.data_type is None or not layout.active_outputs:
+            if layout is None or (data := _layout_data(layout)) is None:
                 return await self.async_step_manual()
-            data_type = DATA_TYPE_RGBW if layout.data_type is DataType.RGBW else DATA_TYPE_RGB
-            if not (error := await _check_socket(self._host, layout.pixel_count, data_type)):
-                segments = [
-                    {
-                        SEGMENT_KEY: segment.name,
-                        SEGMENT_NAME: f"Output {output.index + 1}",
-                        SEGMENT_START: segment.start,
-                        SEGMENT_LENGTH: segment.length,
-                    }
-                    for output, segment in zip(layout.active_outputs, layout.segments(), strict=True)
-                ]
+            if not (error := await _check_socket(self._host, data[CONF_PIXEL_COUNT], data[CONF_DATA_TYPE])):
                 return self.async_create_entry(
                     title=_title(layout, self._host),
-                    data={
-                        CONF_HOST: self._host,
-                        CONF_PIXEL_COUNT: layout.pixel_count,
-                        CONF_DATA_TYPE: data_type,
-                        CONF_SEGMENTS: segments,
-                        CONF_MANUFACTURER: layout.manufacturer,
-                        CONF_MODEL: layout.model,
-                        CONF_FIRMWARE: layout.firmware,
-                        CONF_CONTROLLER_TYPE: self._controller_type,
-                    },
+                    data={CONF_HOST: self._host, **data, CONF_CONTROLLER_TYPE: self._controller_type},
                 )
             errors["base"] = error
         return self.async_show_form(
@@ -178,15 +202,26 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Change the host or the controller type later; the entry reloads so the Scenes light appears or goes."""
+        """Change the host or the controller type later, and re-read the layout; the entry reloads.
+
+        A usable layout replaces the stored one (data type, outputs, pixel count, device info), so switching the
+        controller between 3- and 4-channel input takes effect; without one the stored layout is kept.
+        """
         entry = self._get_reconfigure_entry()
+        http_port = entry.data.get(CONF_HTTP_PORT, DEFAULT_HTTP_PORT)
         errors: dict[str, str] = {}
         if user_input is not None:
             host = user_input[CONF_HOST].strip()
-            if host != entry.data[CONF_HOST]:
+            moved = host != entry.data[CONF_HOST]
+            if moved:
                 await self.async_set_unique_id(host)
                 self._abort_if_unique_id_configured()
-                if not (error := await _check_socket(host, entry.data[CONF_PIXEL_COUNT], entry.data[CONF_DATA_TYPE])):
+            controller_type = user_input[CONF_CONTROLLER_TYPE]
+            layout = _layout_data(await _read_layout(host, controller_type, http_port))
+            updates = {CONF_HOST: host, CONF_CONTROLLER_TYPE: controller_type, **(layout or {})}
+            data = {**entry.data, **updates}
+            if not (error := await _check_socket(host, data[CONF_PIXEL_COUNT], data[CONF_DATA_TYPE])):
+                if moved:
                     # Unique IDs of the entities are keyed by the entry, so only the devices' identities follow the
                     # host: the DDP device and, for a vendor controller type, the controller device.
                     registry = dr.async_get(self.hass)
@@ -195,18 +230,24 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
                     ):
                         if device := registry.async_get_device_by_identifier(old, entry.entry_id):
                             registry.async_update_device(device.id, new_identifiers={new})
-                else:
-                    errors["base"] = error
-            if not errors:
+                # A color order of the old data type would stop the strip from building.
+                options = {
+                    key: value
+                    for key, value in entry.options.items()
+                    if key != CONF_COLOR_ORDER or value in COLOR_ORDERS[data[CONF_DATA_TYPE]]
+                }
                 return self.async_update_reload_and_abort(
                     entry,
                     unique_id=host,
                     title=host if entry.title == entry.data[CONF_HOST] else entry.title,
-                    data_updates={CONF_HOST: host, CONF_CONTROLLER_TYPE: user_input[CONF_CONTROLLER_TYPE]},
+                    data_updates=updates,
+                    options=options,
                 )
-        host = user_input[CONF_HOST] if user_input is not None else entry.data[CONF_HOST]
+            errors["base"] = error
+        host = user_input[CONF_HOST].strip() if user_input is not None else entry.data[CONF_HOST]
         chosen = user_input[CONF_CONTROLLER_TYPE] if user_input is not None else entry.data[CONF_CONTROLLER_TYPE]
-        detected = await detect(host, entry.data.get(CONF_HTTP_PORT, DEFAULT_HTTP_PORT))
+        detected = await detect(host, http_port)
+        layout = _layout_data(await _read_layout(host, chosen, http_port))
         schema = probatio.Schema(
             {
                 probatio.Required(CONF_HOST, default=host): TextSelector(),
@@ -216,7 +257,11 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="reconfigure",
             data_schema=schema,
-            description_placeholders={CONTROLLER_PLACEHOLDER: CONTROLLER_TYPES[detected].label},
+            description_placeholders={
+                CONTROLLER_PLACEHOLDER: CONTROLLER_TYPES[detected].label,
+                DATA_TYPE_PLACEHOLDER: entry.data[CONF_DATA_TYPE],
+                LAYOUT_PLACEHOLDER: _describe(layout),
+            },
             errors=errors,
         )
 

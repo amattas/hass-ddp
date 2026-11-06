@@ -9,15 +9,18 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from aioddp import DDPSendError, Strip, process_frame
+from aioddp import DataType, DDPSendError, Strip, process_frame
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_EFFECT,
     ATTR_EFFECT_LIST,
     ATTR_RGB_COLOR,
+    ATTR_RGBW_COLOR,
+    ATTR_SUPPORTED_COLOR_MODES,
     EFFECT_OFF,
     SERVICE_TURN_OFF,
     SERVICE_TURN_ON,
+    ColorMode,
 )
 from homeassistant.components.light import (
     DOMAIN as LIGHT_DOMAIN,
@@ -42,6 +45,12 @@ OUT2 = "light.ndb_pro_output_2"
 ALL = "light.ndb_pro_all_outputs"
 OUT2_OFFSET = 80 * 3
 RED, GREEN, BLUE = (255, 0, 0), (0, 255, 0), (0, 0, 255)
+WHITE_W = (0, 0, 0, 255)  # the white channel alone: an RGBW light's default look
+
+
+def _color_attr(color: tuple[int, ...]) -> str:
+    """The light attribute (and turn_on key) for ``color``: RGBW for 4 components, else RGB."""
+    return ATTR_RGBW_COLOR if len(color) == 4 else ATTR_RGB_COLOR
 
 
 def _effect_tasks() -> list[asyncio.Task[Any]]:
@@ -60,10 +69,10 @@ async def _set_pattern(hass: HomeAssistant, entity_id: str, **data: Any) -> None
     await hass.services.async_call(DOMAIN, "set_pattern", {ATTR_ENTITY_ID: entity_id, **data}, blocking=True)
 
 
-def _blocks(colors: list[tuple[int, int, int]], block_size: int, pixels: int) -> bytes:
-    """The raw RGB bytes of ``colors`` repeated in blocks of ``block_size`` over ``pixels``."""
+def _blocks(colors: list[tuple[int, ...]], block_size: int, pixels: int) -> bytes:
+    """The raw RGB (or, for RGBW colors, RGBW) bytes of ``colors`` repeated in blocks of ``block_size``."""
     pattern = b"".join(bytes(color) * block_size for color in colors)
-    return (pattern * pixels)[: pixels * 3]
+    return (pattern * pixels)[: pixels * len(colors[0])]
 
 
 async def _setup(hass: HomeAssistant, entry: MockConfigEntry) -> None:
@@ -72,34 +81,58 @@ async def _setup(hass: HomeAssistant, entry: MockConfigEntry) -> None:
 
 
 @pytest.mark.parametrize(
-    ("options", "cap", "order"),
-    [({}, 0.6, "RGB"), ({"brightness_cap": 40, "color_order": "GRB", "fps": 30, "keepalive": 0}, 0.4, "GRB")],
-    ids=["defaults", "options"],
+    ("data_type", "options", "cap", "order", "color", "sent"),
+    [
+        ("rgb", {}, 0.6, "RGB", (255, 100, 0), (255, 100, 0)),
+        (
+            "rgb",
+            {"brightness_cap": 40, "color_order": "GRB", "fps": 30, "keepalive": 0},
+            0.4,
+            "GRB",
+            (255, 100, 0),
+            (255, 100, 0),
+        ),
+        ("rgbw", {"color_order": "GRBW"}, 0.6, "GRBW", (255, 100, 0, 50), (255, 100, 0, 50)),  # W reaches the wire
+        ("rgbw", {}, 0.6, "RGBW", None, WHITE_W),  # a bare turn_on: white on the W channel only
+    ],
+    ids=["defaults", "options", "rgbw", "rgbw-default-white"],
 )
 async def test_solid_on_sends_color_through_pipeline(
     hass: HomeAssistant,
     udp_listener: Listener,
     entry_factory: Callable[..., MockConfigEntry],
+    data_type: str,
     options: dict[str, Any],
     cap: float,
     order: str,
+    color: tuple[int, ...] | None,
+    sent: tuple[int, ...],
 ) -> None:
-    entry = entry_factory(options=options)
+    entry = entry_factory(options=options, data_type=data_type)
     await _setup(hass, entry)
 
-    await _turn_on(hass, OUT2, rgb_color=(255, 100, 0), brightness=128)
+    await _turn_on(hass, OUT2, brightness=128, **({_color_attr(color): color} if color else {}))
 
-    packet = await udp_listener.wait_for(lambda p: p.offset == OUT2_OFFSET)
-    strip = Strip("127.0.0.1", 122, port=udp_listener.port, color_order=order, brightness_cap=cap)
+    channels = len(sent)
+    packet = await udp_listener.wait_for(lambda p: p.offset == 80 * channels)
+    strip = Strip(
+        "127.0.0.1",
+        122,
+        port=udp_listener.port,
+        data_type=DataType.RGBW if channels == 4 else DataType.RGB,
+        color_order=order,
+        brightness_cap=cap,
+    )
     assert packet.push
-    assert packet.data_type == 0x0B
-    assert packet.data == process_frame(bytes((255, 100, 0)) * 42, strip, brightness=128 / 255)
+    assert packet.data_type == strip.wire_data_type
+    assert packet.data == process_frame(bytes(sent) * 42, strip, brightness=128 / 255)
 
     state = hass.states.get(OUT2)
     assert state is not None
     assert state.state == STATE_ON
     assert state.attributes[ATTR_BRIGHTNESS] == 128
-    assert state.attributes[ATTR_RGB_COLOR] == (255, 100, 0)
+    assert state.attributes[_color_attr(sent)] == sent
+    assert state.attributes[ATTR_SUPPORTED_COLOR_MODES] == [ColorMode.RGBW if channels == 4 else ColorMode.RGB]
     assert state.attributes[ATTR_EFFECT] == EFFECT_OFF
     assert state.attributes[ATTR_EFFECT_LIST] == [EFFECT_OFF, "breathe", "chase", "twinkle", "rainbow", "palette"]
     assert await hass.config_entries.async_unload(entry.entry_id)
@@ -138,11 +171,15 @@ async def test_turn_off_blanks_segment_and_releases_after_the_last(
         assert (packet.offset, packet.data) == keepalive
 
 
+@pytest.mark.parametrize("color", [BLUE, (0, 0, 255, 200)], ids=["rgb", "rgbw"])
 async def test_effect_runs_updates_and_stops_on_solid(
-    hass: HomeAssistant, udp_listener: Listener, setup_entry: MockConfigEntry
+    hass: HomeAssistant, udp_listener: Listener, entry_factory: Callable[..., MockConfigEntry], color: tuple[int, ...]
 ) -> None:
-    runtime = setup_entry.runtime_data
-    await _turn_on(hass, OUT1, effect="chase", rgb_color=(0, 0, 255), brightness=255)
+    entry = entry_factory(data_type="rgbw" if len(color) == 4 else "rgb")
+    await _setup(hass, entry)
+    runtime = entry.runtime_data
+    # chase renders RGB only: on an RGBW light it takes the color's first three channels and ignores W.
+    await _turn_on(hass, OUT1, effect="chase", brightness=255, **{_color_attr(color): color})
     runner = runtime.runners["output1"]
     assert runner.running
     assert [t.get_name() for t in _effect_tasks()] == ["aioddp-effect-chase-output1"]
@@ -159,44 +196,43 @@ async def test_effect_runs_updates_and_stops_on_solid(
     assert not runner.running
     assert _effect_tasks() == []
     await udp_listener.settle()
-    solid = process_frame(bytes((0, 0, 255)) * 80, runtime.sender.strip, brightness=50 / 255)
-    assert udp_listener.packets[-1].data == solid
+    solid = process_frame(bytes(color) * 80, runtime.sender.strip, brightness=50 / 255)
+    assert udp_listener.packets[-1].data == solid  # the solid look carries W again
 
     udp_listener.packets.clear()
     await udp_listener.settle()
     assert udp_listener.packets == []
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+@pytest.mark.parametrize(("first", "second"), [(GREEN, RED), ((0, 255, 0, 40), (255, 0, 0, 255))], ids=["rgb", "rgbw"])
 async def test_restore_resends_last_state(
-    hass: HomeAssistant, udp_listener: Listener, entry_factory: Callable[..., MockConfigEntry]
+    hass: HomeAssistant,
+    udp_listener: Listener,
+    entry_factory: Callable[..., MockConfigEntry],
+    first: tuple[int, ...],
+    second: tuple[int, ...],
 ) -> None:
+    attr = _color_attr(first)
     mock_restore_cache(
         hass,
         [
-            State(OUT1, STATE_ON, {ATTR_BRIGHTNESS: 100, ATTR_RGB_COLOR: [0, 255, 0], ATTR_EFFECT: EFFECT_OFF}),
-            State(OUT2, STATE_ON, {ATTR_BRIGHTNESS: 200, ATTR_RGB_COLOR: [255, 0, 0], ATTR_EFFECT: "rainbow"}),
+            State(OUT1, STATE_ON, {ATTR_BRIGHTNESS: 100, attr: list(first), ATTR_EFFECT: EFFECT_OFF}),
+            State(OUT2, STATE_ON, {ATTR_BRIGHTNESS: 200, attr: list(second), ATTR_EFFECT: "rainbow"}),
         ],
     )
-    entry = entry_factory()
+    entry = entry_factory(data_type="rgbw" if len(first) == 4 else "rgb")
     await _setup(hass, entry)
 
     packet = await udp_listener.wait_for(lambda p: p.offset == 0)
-    assert packet.data == process_frame(bytes((0, 255, 0)) * 80, entry.runtime_data.sender.strip, brightness=100 / 255)
+    assert packet.data == process_frame(bytes(first) * 80, entry.runtime_data.sender.strip, brightness=100 / 255)
     assert entry.runtime_data.runners["output2"].running
-    await udp_listener.wait_for(lambda p: p.offset == OUT2_OFFSET)
+    await udp_listener.wait_for(lambda p: p.offset == 80 * len(first))
 
     out1, out2 = hass.states.get(OUT1), hass.states.get(OUT2)
     assert out1 is not None and out2 is not None
-    assert (out1.state, out1.attributes[ATTR_BRIGHTNESS], out1.attributes[ATTR_RGB_COLOR]) == (
-        STATE_ON,
-        100,
-        (0, 255, 0),
-    )
-    assert (out2.state, out2.attributes[ATTR_EFFECT], out2.attributes[ATTR_RGB_COLOR]) == (
-        STATE_ON,
-        "rainbow",
-        (255, 0, 0),
-    )
+    assert (out1.state, out1.attributes[ATTR_BRIGHTNESS], out1.attributes[attr]) == (STATE_ON, 100, first)
+    assert (out2.state, out2.attributes[ATTR_EFFECT], out2.attributes[attr]) == (STATE_ON, "rainbow", second)
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -299,8 +335,14 @@ async def test_setup_retries_when_socket_will_not_open(
             False,
             "Dropping the stored pattern",
         ),
+        (  # stored while the entry was RGBW: white cannot reach 3-channel pixels
+            [255, 0, 0],
+            {"effect": "palette", "pattern": {"colors": [[1, 2, 3, 4]], "block_size": 1, "params": {}}},
+            False,
+            "Dropping the stored pattern",
+        ),
     ],
-    ids=["malformed-color", "send-fails", "malformed-pattern", "invalid-pattern"],
+    ids=["malformed-color", "send-fails", "malformed-pattern", "invalid-pattern", "rgbw-pattern-on-rgb-entry"],
 )
 async def test_restore_tolerates_bad_data(
     hass: HomeAssistant,
@@ -333,52 +375,81 @@ async def test_restore_tolerates_bad_data(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+@pytest.mark.parametrize(
+    ("colors", "solid"),
+    [([RED, GREEN], BLUE), ([RED, WHITE_W], (0, 0, 255, 80))],  # RGBW: an RGB color in the pattern gets W=0
+    ids=["rgb", "rgbw"],
+)
 @pytest.mark.parametrize(("entity_id", "pixels"), [(OUT1, 80), (ALL, 122)], ids=["output", "all-outputs"])
 async def test_set_pattern_sends_blocks_until_a_color_replaces_it(
-    hass: HomeAssistant, udp_listener: Listener, setup_entry: MockConfigEntry, entity_id: str, pixels: int
+    hass: HomeAssistant,
+    udp_listener: Listener,
+    entry_factory: Callable[..., MockConfigEntry],
+    entity_id: str,
+    pixels: int,
+    colors: list[tuple[int, ...]],
+    solid: tuple[int, ...],
 ) -> None:
-    strip = setup_entry.runtime_data.sender.strip
-    await _set_pattern(hass, entity_id, colors=[list(RED), list(GREEN)], brightness=128)
+    entry = entry_factory(data_type="rgbw" if len(solid) == 4 else "rgb")
+    await _setup(hass, entry)
+    strip = entry.runtime_data.sender.strip
+    await _set_pattern(hass, entity_id, colors=[list(color) for color in colors], brightness=128)
 
     # Every other pixel; on All outputs one frame runs on across both outputs.
     packet = await udp_listener.wait_for(lambda p: p.offset == 0)
-    assert packet.data == process_frame(_blocks([RED, GREEN], 1, pixels), strip, brightness=128 / 255)
+    padded = [color + (0,) * (len(solid) - len(color)) for color in colors]
+    assert packet.data == process_frame(_blocks(padded, 1, pixels), strip, brightness=128 / 255)
     state = hass.states.get(entity_id)
     assert state is not None
     assert (state.state, state.attributes[ATTR_EFFECT], state.attributes[ATTR_BRIGHTNESS]) == (STATE_ON, "palette", 128)
 
     # A color without an effect change replaces the pattern with that one color.
     udp_listener.packets.clear()
-    await _turn_on(hass, entity_id, rgb_color=BLUE)
-    solid = process_frame(bytes(BLUE) * pixels, strip, brightness=128 / 255)
-    await udp_listener.wait_for(lambda p: p.offset == 0 and p.data == solid)
+    await _turn_on(hass, entity_id, **{_color_attr(solid): solid})
+    frame = process_frame(bytes(solid) * pixels, strip, brightness=128 / 255)
+    await udp_listener.wait_for(lambda p: p.offset == 0 and p.data == frame)
     assert hass.states.get(entity_id).attributes[ATTR_EFFECT] == "palette"  # type: ignore[union-attr]
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 @pytest.mark.parametrize(
-    ("data", "translation_key"),
+    ("data_type", "data", "translation_key"),
     [
-        ({"params": {"speed": 4}}, "invalid_effect_params"),  # palette does not move
-        ({"effect": "chase", "params": {"speed": 500}}, "invalid_effect_params"),
-        ({"effect": "chase", "block_size": 2}, "invalid_effect_params"),  # chase has no blocks
-        ({"effect": "rainbow"}, "effect_without_colors"),
-        ({"effect": "strobe"}, "unknown_effect"),
+        ("rgb", {"params": {"speed": 4}}, "invalid_effect_params"),  # palette does not move
+        ("rgb", {"effect": "chase", "params": {"speed": 500}}, "invalid_effect_params"),
+        ("rgb", {"effect": "chase", "block_size": 2}, "invalid_effect_params"),  # chase has no blocks
+        ("rgb", {"effect": "rainbow"}, "effect_without_colors"),
+        ("rgb", {"effect": "strobe"}, "unknown_effect"),
+        ("rgb", {"colors": [[1, 2, 3, 4]]}, "rgbw_needs_rgbw_pixels"),  # W on 3-channel pixels
+        ("rgbw", {"colors": [[1, 2, 3], [1, 2, 3, 4]], "effect": "chase"}, "rgbw_effect_unsupported"),
     ],
-    ids=["unknown-param", "out-of-range", "no-block-size", "no-colors", "unknown-effect"],
+    ids=[
+        "unknown-param",
+        "out-of-range",
+        "no-block-size",
+        "no-colors",
+        "unknown-effect",
+        "rgbw-on-rgb-entry",
+        "rgbw-on-rgb-effect",
+    ],
 )
 async def test_set_pattern_rejects_bad_patterns(
     hass: HomeAssistant,
     udp_listener: Listener,
-    setup_entry: MockConfigEntry,
+    entry_factory: Callable[..., MockConfigEntry],
+    data_type: str,
     data: dict[str, Any],
     translation_key: str,
 ) -> None:
+    entry = entry_factory(data_type=data_type)
+    await _setup(hass, entry)
     with pytest.raises(ServiceValidationError) as raised:
-        await _set_pattern(hass, OUT1, colors=[[1, 2, 3]], **data)
+        await _set_pattern(hass, OUT1, **{"colors": [[1, 2, 3]], **data})
     assert raised.value.translation_key == translation_key
     assert hass.states.get(OUT1).state == STATE_OFF  # type: ignore[union-attr]
     await udp_listener.settle()
     assert udp_listener.packets == []
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 @pytest.mark.parametrize("segments", [SEGMENTS, SEGMENTS[:1]], ids=["two-outputs", "one-output"])

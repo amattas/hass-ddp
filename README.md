@@ -3,7 +3,8 @@
 A Home Assistant custom integration that drives DDP (Distributed Display Protocol) pixel controllers, such as the
 Minleon NDB-Pro, as native light entities. Each controller is one device with one light per output (a Minleon
 NDB-Pro adds a second device for its built-in effects and palette). Every light
-supports on/off, brightness, RGB color, and an effect list, so Home Assistant scenes can capture and replay it.
+supports on/off, brightness, RGB color (RGBW on 4-channel pixels), and an effect list, so Home Assistant scenes can
+capture and replay it.
 
 All protocol code lives in [aioddp](https://github.com/amattas/aioddp), and Minleon NDB-Pro control in
 [pyminleon](https://github.com/amattas/pyminleon); this repository only maps them onto Home Assistant.
@@ -23,9 +24,15 @@ for which controllers have been exercised.
 
 | Entity | What it does |
 |---|---|
-| **Output N** light (one per output; **All** for a manually described strip) | On/off, brightness, RGB color, the aioddp effects, and multi-color patterns (`ddp.set_pattern`). Sends DDP; its state is assumed |
+| **Output N** light (one per output; **All** for a manually described strip) | On/off, brightness, RGB color (RGBW color for an RGBW entry), the aioddp effects, and multi-color patterns (`ddp.set_pattern`). Sends DDP; its state is assumed |
 | **All outputs** light (only when the controller has more than one output) | The same as an output light, over the whole strip: a pattern or effect runs on across the outputs in one DDP frame |
 | **Scenes** light (vendor controller types only, on the controller device) | Selects the controller's built-in effects and shows, brightness maps to its intensity. Its palette (the colors those effects use) is the `colors` and `background` attributes and is set with `ddp.set_colors`. Polled |
+
+**RGBW.** When the entry's pixel type is RGBW (the controller reports 4-channel input, or you chose RGBW when
+describing the strip), every DDP light uses Home Assistant's RGBW color mode: `rgbw_color` sets red, green, blue,
+and white, and white reaches the pixels' white LEDs. The default look is the white channel alone, `[0, 0, 0, 255]`.
+Solid colors and `palette` patterns carry white; the animated effects use red, green, and blue only (see Known
+limitations).
 
 Devices: the output lights and All outputs are on the DDP device, named after the entry. A vendor controller type adds
 a controller device named after the entry and the type (for example "Front Yard Minleon NDB-Pro"), connected through
@@ -89,10 +96,16 @@ in the controller type registry (`custom_components/ddp/controller.py`) backed b
 
 ### Reconfigure
 
-**Reconfigure** on the integration entry changes the host (for example after a new DHCP lease) or the controller type;
-the entry reloads and keeps its devices, entities, and history. Choosing Generic DDP removes the controller device and
-its Scenes light. The
-pixel layout is not re-read: to change it, remove and re-add the entry.
+**Reconfigure** on the integration entry changes the host (for example after a new DHCP lease) or the controller type,
+and re-reads the output layout the same way adding does (a DDP query, then the controller type's own API). The form
+shows the stored pixel type and the layout the controller reports now. When it reports one, the entry stores its
+pixel type (RGB or RGBW), outputs, and pixel count; so after switching an NDB-Pro between a 3-channel and a 4-channel
+input mode, reconfigure the entry to follow it. Outputs that are still there keep their lights; an output that is gone
+loses its light (and with a single output left, All outputs goes too). A color order option that does not fit the new
+pixel type is reset to the default. When the controller reports no layout, the stored one is kept.
+
+The entry reloads and keeps its devices, entities, and history. Choosing Generic DDP removes the controller device and
+its Scenes light.
 
 ### Options
 
@@ -134,8 +147,11 @@ in fixed blocks (`block_size` pixels each, so two colors with block size 1 alter
 the colors to `chase` (its lit groups cycle through them), or to `breathe` and `twinkle`, which use the first color.
 `params` sets the effect's other parameters, such as the chase `speed`; a bad value is refused with the parameter
 named. The light's effect shows the rendering effect, and the pattern is kept across restarts and a bare
-`light.turn_on`. A later `light.turn_on` with `rgb_color` replaces the pattern with that one color; choosing another
+`light.turn_on`. A later `light.turn_on` with a color replaces the pattern with that one color; choosing another
 effect drops it.
+
+On an RGBW entry a pattern color may be `[r, g, b, w]` (an `[r, g, b]` color gets white 0), with `palette` only;
+the other effects render RGB and refuse a white value, as does an RGB entry.
 
 ## NDB-Pro built-in scenes
 
@@ -309,14 +325,14 @@ Red, white, and blue blocks of five pixels on one output, then a moving version 
 
 | Action | Target | Fields |
 |---|---|---|
-| `ddp.set_pattern` | An output light or All outputs | `colors` (required: 1-16 colors, each `[r, g, b]` 0-255), `block_size` (pixels per color block, default 1; palette only), `effect` (`palette` by default, or `chase`, `breathe`, `twinkle`), `params` (the effect's other parameters, for example `{"speed": 4}`), `brightness` (1-255) |
+| `ddp.set_pattern` | An output light or All outputs | `colors` (required: 1-16 colors, each `[r, g, b]` 0-255, or `[r, g, b, w]` on an RGBW entry with `palette`), `block_size` (pixels per color block, default 1; palette only), `effect` (`palette` by default, or `chase`, `breathe`, `twinkle`), `params` (the effect's other parameters, for example `{"speed": 4}`), `brightness` (1-255) |
 | `ddp.recall_preset` | A Scenes light | `preset` (1-20; 1-10 are slots of Show 1, 11-20 of Show 2) |
 | `ddp.set_colors` | A Scenes light | `colors` (required: 0-5 colors for palette slots 1-5, each `[r, g, b]` 0-255 or `cool_white` / `warm_white`; the remaining slots are emptied, and an empty list lets the controller pick random colors), `background` (`[r, g, b]`; left as it is when omitted) |
-| `light.turn_on` / `light.turn_off` | Any light of this integration | Segment lights: `brightness`, `rgb_color`, `effect`. Scenes light: `brightness`, `effect` |
+| `light.turn_on` / `light.turn_off` | Any light of this integration | Segment lights: `brightness`, `rgb_color` (`rgbw_color` on an RGBW entry), `effect`. Scenes light: `brightness`, `effect` |
 
 `ddp.set_pattern` on the Scenes light, and `ddp.recall_preset` or `ddp.set_colors` on a segment light, are refused. Recalling a preset overwrites the controller's current colors with
 the preset's. Actions raise an error when a send fails, the effect is unknown or takes no colors, a pattern parameter
-is invalid, or the controller does not answer.
+is invalid, a pattern color has a white value the entry or effect cannot show, or the controller does not answer.
 
 ## Diagnostics
 
@@ -337,8 +353,13 @@ Wi-Fi name are redacted.
 - **Setup cannot verify the controller over DDP.** It only checks that a UDP socket opens; a wrong host looks fine
   until a frame is sent and nothing lights up.
 - **The Scenes light needs the controller's HTTP UI on port 80** and only exists for vendor controller types.
-- **The layout is read once, when the entry is added.** If you re-patch outputs on the controller, remove and re-add
-  the entry.
+- **The layout is read when the entry is added and on Reconfigure,** never at startup. If you re-patch outputs or
+  change the controller's input mode, reconfigure the entry.
+- **White needs a 4-channel input mode.** The NDB-Pro must be set to a 4-channel (RGBW) input mode in its own UI for
+  the entry to be RGBW; reconfigure the entry after changing it. In a 3-channel mode the controller derives white
+  itself and the lights stay RGB.
+- **Animated effects ignore white.** `breathe`, `chase`, `twinkle`, and `rainbow` render RGB: on an RGBW light they
+  use the color's red, green, and blue and leave the white LEDs off. Solid colors and `palette` carry white.
 - **No discovery.** DDP has no discovery protocol, so controllers are added by host.
 - **No brand images yet,** so the integration shows Home Assistant's placeholder icon.
 

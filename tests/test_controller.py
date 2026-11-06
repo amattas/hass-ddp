@@ -41,7 +41,7 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.ddp import DDPRuntime
 from custom_components.ddp.const import DOMAIN
-from custom_components.ddp.controller import fetch_layout
+from custom_components.ddp.controller import detect, fetch_layout
 
 from .conftest import FakeController, Listener
 
@@ -525,6 +525,8 @@ async def test_recall_preset_read_back_failure_marks_the_light_unavailable(
     assert _state(hass, SCENES).state == STATE_UNAVAILABLE
 
 
-async def test_http_layout_of_a_silent_controller_is_none(fake_controller: FakeController) -> None:
+@pytest.mark.parametrize("host", ["127.0.0.1", "not a host"], ids=["silent", "host-the-library-rejects"])
+async def test_http_layout_and_detection_of_an_unusable_controller(fake_controller: FakeController, host: str) -> None:
     fake_controller.offline = True
-    assert await fetch_layout("ndbpro", "127.0.0.1", fake_controller.port) is None
+    assert await fetch_layout("ndbpro", host, fake_controller.port) is None
+    assert await detect(host, fake_controller.port) == "generic"

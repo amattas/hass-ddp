@@ -35,7 +35,7 @@
       },
       "reconfigure": {
         "title": "Reconfigure the controller",
-        "description": "Detected controller: {detected}. Changing the host keeps the device and its lights. Changing the type adds or removes the Scenes light; the DDP lights are kept.",
+        "description": "Detected controller: {detected}. Stored pixel type: {data_type}. Layout the controller reports now: {layout}. Submitting stores the reported layout (pixel type, outputs and pixel count), so a change of the controller's input mode (3 or 4 channels) takes effect; an output that is gone loses its light. When the controller reports no layout (none), the stored layout is kept. Changing the host keeps the device and its lights. Changing the type adds or removes the Scenes light; the DDP lights are kept.",
         "data": {
           "host": "Host",
           "controller_type": "Controller type"
@@ -118,6 +118,12 @@
     },
     "palette_not_a_controller": {
       "message": "{entity} is not a controller Scenes light; set_colors works only on a Scenes light."
+    },
+    "rgbw_needs_rgbw_pixels": {
+      "message": "{entity} drives RGB pixels, so pattern colors take red, green, blue only. To use white, switch the controller to a 4-channel input mode and reconfigure the entry."
+    },
+    "rgbw_effect_unsupported": {
+      "message": "Effect {effect} renders RGB only, so its colors take red, green, blue only. Effects that take white: {effects}"
     }
   },
   "services": {
@@ -137,7 +143,7 @@
       "fields": {
         "colors": {
           "name": "Colors",
-          "description": "1 to 16 RGB colors, each a list of red, green, blue from 0 to 255, for example [[255, 0, 0], [0, 255, 0]]."
+          "description": "1 to 16 colors, each a list of red, green, blue from 0 to 255, for example [[255, 0, 0], [0, 255, 0]]. On RGBW pixels a color may add white as a fourth value, for example [255, 0, 0, 0] or [0, 0, 0, 255], with effects that take white (palette)."
         },
         "block_size": {
           "name": "Block size",

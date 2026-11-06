@@ -1,8 +1,10 @@
 """One light per segment (DDP), an "All outputs" light, and a "Scenes" light for a vendor controller's built-in effects.
 
-Segment lights: on/off, brightness, RGB color, aioddp effects, and multi-color patterns (``ddp.set_pattern``),
-restored and re-sent on startup. An entry with more than one segment also gets "All outputs", the same light over the
-whole strip, so a pattern or effect runs on across the outputs in one DDP frame.
+Segment lights: on/off, brightness, RGB color (RGBW on an rgbw entry, white on the wire), aioddp effects, and
+multi-color patterns (``ddp.set_pattern``), restored and re-sent on startup. Effects that render RGB only (the
+animated ones) take the first three channels of an RGBW color and ignore W. An entry with more than one segment
+also gets "All outputs", the same light over the whole strip, so a pattern or effect runs on across the outputs in
+one DDP frame.
 
 Ownership: lights whose pixels overlap (All outputs and each output) take the pixels from each other. Turning one on
 stops the overlapping lights' runners and shows them off without sending anything, exactly like a hand-back to the
@@ -27,6 +29,7 @@ from homeassistant.components.light.const import (
     ATTR_BRIGHTNESS,
     ATTR_EFFECT,
     ATTR_RGB_COLOR,
+    ATTR_RGBW_COLOR,
     EFFECT_OFF,
     ColorMode,
     LightEntityFeature,
@@ -47,11 +50,15 @@ from .const import (
     ATTR_BLOCK_SIZE,
     ATTR_COLORS,
     ATTR_PARAMS,
+    CONF_DATA_TYPE,
+    DATA_TYPE_RGBW,
     DOMAIN,
     PATTERN_EFFECT,
     RGB,
+    RGBW,
     SOLID_EFFECT,
     STRIP_KEY,
+    Color,
 )
 from .controller import CONTROLLER_ERRORS, EMPTY_COLOR, PALETTE_SLOTS
 from .coordinator import DDPScenesCoordinator, SceneState
@@ -64,6 +71,7 @@ PARALLEL_UPDATES = 0
 
 DEFAULT_BRIGHTNESS = 255
 DEFAULT_RGB: RGB = (255, 255, 255)
+DEFAULT_RGBW: RGBW = (0, 0, 0, 255)  # white on an RGBW strip is its white LEDs alone
 
 EFFECTS: dict[str, EffectInfo] = {info.name: info for info in list_effects() if info.name != SOLID_EFFECT}
 
@@ -82,13 +90,19 @@ def _color_target(info: EffectInfo) -> str | None:
 
 
 PATTERN_EFFECTS = [name for name, info in EFFECTS.items() if _color_target(info) is not None]
+RGBW_PATTERN_EFFECTS = [name for name in PATTERN_EFFECTS if EFFECTS[name].rgbw]
+
+
+def _has_white(colors: Sequence[Color]) -> bool:
+    return any(len(color) == 4 for color in colors)
 
 
 @dataclass(frozen=True, slots=True)
 class Pattern:
-    """A ``set_pattern`` look: colors, pixels per color block (``None``: the effect's default), and extra params."""
+    """A ``set_pattern`` look: colors (RGB, or RGBW where the entry and effect allow), pixels per color block
+    (``None``: the effect's default), and extra params."""
 
-    colors: tuple[RGB, ...]
+    colors: tuple[Color, ...]
     block_size: int | None = None
     params: Mapping[str, Any] = field(default_factory=dict)
 
@@ -104,7 +118,7 @@ class Pattern:
         """The pattern stored by ``as_dict``, or ``None`` if ``value`` is not one."""
         stored: Mapping[str, Any] = value if isinstance(value, Mapping) else {}
         colors, block_size, params = stored.get(ATTR_COLORS), stored.get(ATTR_BLOCK_SIZE), stored.get(ATTR_PARAMS) or {}
-        parsed = [_rgb(color) for color in colors] if isinstance(colors, list) else []
+        parsed = [_color(color) for color in colors] if isinstance(colors, list) else []
         rgbs = [color for color in parsed if color is not None]
         block_ok = block_size is None or (isinstance(block_size, int) and not isinstance(block_size, bool))
         if not rgbs or len(rgbs) != len(parsed) or not isinstance(params, Mapping) or not block_ok:
@@ -112,7 +126,7 @@ class Pattern:
         return cls(tuple(rgbs), block_size, dict(params))
 
 
-def _effect_params(info: EffectInfo, colors: Sequence[RGB], pattern: Pattern | None = None) -> dict[str, Any]:
+def _effect_params(info: EffectInfo, colors: Sequence[Color], pattern: Pattern | None = None) -> dict[str, Any]:
     """Params for ``info``: the pattern's extra params and block size, with its colors (or ``colors``) on the
     effect's color target; an effect that takes one color gets the first."""
     params: dict[str, Any] = dict(pattern.params) if pattern is not None else {}
@@ -135,12 +149,18 @@ async def async_setup_entry(
         whole = Segment(STRIP_KEY, 0, runtime.sender.strip.pixel_count)
         lights.append(AllOutputsLight(entry, SegmentConfig(STRIP_KEY, None, whole)))
     runtime.segment_lights = lights
+    # Drop lights this entry no longer has: an output the re-read layout lost, All outputs once one output is left,
+    # and the Scenes light after a switch to Generic DDP.
+    current = {light.unique_id for light in lights}
+    if runtime.scenes is not None:
+        current.add(f"{entry.entry_id}_{SCENES_KEY}")
+    registry = er.async_get(hass)
+    for registered in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if registered.domain == LIGHT_DOMAIN and registered.unique_id not in current:
+            registry.async_remove(registered.entity_id)
     async_add_entities(lights)
     if runtime.scenes is None:
-        # Switched to Generic DDP: drop the Scenes entity and the controller device the previous type registered.
-        registry = er.async_get(hass)
-        if stale := registry.async_get_entity_id(LIGHT_DOMAIN, DOMAIN, f"{entry.entry_id}_{SCENES_KEY}"):
-            registry.async_remove(stale)
+        # Switched to Generic DDP: drop the controller device the previous type registered.
         devices = dr.async_get(hass)
         _, controller = device_identifiers(entry.data[CONF_HOST])
         if stale_device := devices.async_get_device_by_identifier(controller, entry.entry_id):
@@ -151,14 +171,22 @@ async def async_setup_entry(
     async_add_entities([ScenesLight(entry, runtime.scenes, ddp_device.id)])
 
 
-def _rgb(value: object) -> RGB | None:
+def _color(value: object) -> Color | None:
+    """``value`` as an RGB or RGBW color, or ``None`` if it is neither."""
     if (
         isinstance(value, list | tuple)
-        and len(value) == 3
+        and len(value) in (3, 4)
         and all(isinstance(c, int) and not isinstance(c, bool) and 0 <= c <= 255 for c in value)
     ):
-        return (value[0], value[1], value[2])
+        return _as_color(value)
     return None
+
+
+def _as_color(value: Sequence[int]) -> Color:
+    """A validated 3- or 4-component sequence as a color tuple."""
+    if len(value) == 4:
+        return (value[0], value[1], value[2], value[3])
+    return (value[0], value[1], value[2])
 
 
 def _overlaps(a: Segment, b: Segment) -> bool:
@@ -166,12 +194,13 @@ def _overlaps(a: Segment, b: Segment) -> bool:
 
 
 class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
-    """A segment of the strip. DDP is send-only, so HA's state is the truth."""
+    """A segment of the strip. DDP is send-only, so HA's state is the truth.
+
+    The color mode follows the entry's data type: RGB, or RGBW (``rgbw_color``) for 4-channel pixels.
+    """
 
     _attr_should_poll = False
     _attr_assumed_state = True
-    _attr_color_mode = ColorMode.RGB
-    _attr_supported_color_modes = {ColorMode.RGB}
     _attr_supported_features = LightEntityFeature.EFFECT
     _attr_effect_list = [EFFECT_OFF, *EFFECTS]
 
@@ -182,12 +211,33 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
         self._lock = asyncio.Lock()  # one state change at a time, so runners never double-start
         if config.name is not None:
             self._attr_name = config.name  # the layout's label for this output, stored with the entry
+        self._rgbw = entry.data[CONF_DATA_TYPE] == DATA_TYPE_RGBW
+        mode = ColorMode.RGBW if self._rgbw else ColorMode.RGB
+        self._attr_color_mode = mode
+        self._attr_supported_color_modes = {mode}
+        self._color_key = ATTR_RGBW_COLOR if self._rgbw else ATTR_RGB_COLOR  # turn_on kwarg and restore key
+        self._color: Color = DEFAULT_RGBW if self._rgbw else DEFAULT_RGB
         self._attr_is_on = False
         self._attr_brightness = DEFAULT_BRIGHTNESS
-        self._attr_rgb_color = DEFAULT_RGB
         self._attr_effect = EFFECT_OFF
         self._pattern: Pattern | None = None  # set by set_pattern; replaced by a color or an effect change
         self._runner_effect: str | None = None  # effect of the runner this entity last started
+
+    @property
+    def rgb_color(self) -> RGB | None:
+        color = self._color
+        return (color[0], color[1], color[2]) if len(color) == 3 else None
+
+    @property
+    def rgbw_color(self) -> RGBW | None:
+        color = self._color
+        return (color[0], color[1], color[2], color[3]) if len(color) == 4 else None
+
+    def _fit(self, color: Color) -> Color:
+        """``color`` as this light's own color: an RGB color gets W=0 on an RGBW light."""
+        if self._rgbw and len(color) == 3:
+            return (color[0], color[1], color[2], 0)
+        return color
 
     async def async_added_to_hass(self) -> None:
         """Restore the last state and, if it was on, send it again (DDP controllers forget on power loss)."""
@@ -203,7 +253,9 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
         brightness = look.get(ATTR_BRIGHTNESS)
         if isinstance(brightness, int) and 1 <= brightness <= 255:
             self._attr_brightness = brightness
-        self._attr_rgb_color = _rgb(look.get(ATTR_RGB_COLOR)) or self._attr_rgb_color
+        color = _color(look.get(self._color_key))
+        if color is not None and len(color) == len(self._color):
+            self._color = color
         effect = look.get(ATTR_EFFECT)
         self._attr_effect = effect if effect in EFFECTS else EFFECT_OFF
         self._pattern = self._restored_pattern(look.get(ATTR_PATTERN))
@@ -223,6 +275,9 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
         pattern = Pattern.from_dict(value)
         if info is None or pattern is None or _color_target(info) is None:
             return None
+        if not self._rgbw and _has_white(pattern.colors):  # stored while the entry was RGBW
+            _LOGGER.warning("Dropping the stored pattern of %s: RGBW colors on RGB pixels", self.entity_id)
+            return None
         try:
             validate_params(get_effect(info.name), _effect_params(info, pattern.colors, pattern))
         except DDPError as err:
@@ -236,7 +291,7 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
         return RestoredExtraData(
             {
                 ATTR_BRIGHTNESS: self._attr_brightness,
-                ATTR_RGB_COLOR: list(self._attr_rgb_color or DEFAULT_RGB),
+                self._color_key: list(self._color),
                 ATTR_EFFECT: self._attr_effect,
                 ATTR_PATTERN: self._pattern.as_dict() if self._pattern is not None else None,
             }
@@ -257,10 +312,10 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
                 translation_placeholders={"effect": str(effect), "effects": ", ".join(self.effect_list or [])},
             )
         # A color or another effect replaces the pattern; a bare turn_on (or brightness) keeps it.
-        keep = ATTR_RGB_COLOR not in kwargs and effect == self._attr_effect
+        keep = self._color_key not in kwargs and effect == self._attr_effect
         await self._apply(
             kwargs.get(ATTR_BRIGHTNESS, self._attr_brightness),
-            kwargs.get(ATTR_RGB_COLOR, self._attr_rgb_color),
+            _as_color(kwargs[self._color_key]) if self._color_key in kwargs else self._color,
             effect,
             self._pattern if keep else None,
         )
@@ -273,7 +328,10 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
         params: Mapping[str, Any] | None = None,
         brightness: int | None = None,
     ) -> None:
-        """The ``set_pattern`` action: ``colors`` in blocks of ``block_size`` pixels, rendered by ``effect``."""
+        """The ``set_pattern`` action: ``colors`` in blocks of ``block_size`` pixels, rendered by ``effect``.
+
+        RGBW colors need an RGBW entry and an effect that takes white; refused here, before aioddp would.
+        """
         info = EFFECTS.get(effect)
         if info is None:
             raise ServiceValidationError(
@@ -287,7 +345,19 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
                 translation_key="effect_without_colors",
                 translation_placeholders={"effect": effect, "effects": ", ".join(PATTERN_EFFECTS)},
             )
-        pattern = Pattern(tuple((c[0], c[1], c[2]) for c in colors), block_size, dict(params or {}))
+        pattern = Pattern(tuple(_as_color(c) for c in colors), block_size, dict(params or {}))
+        if _has_white(pattern.colors) and not self._rgbw:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="rgbw_needs_rgbw_pixels",
+                translation_placeholders={"entity": self.entity_id},
+            )
+        if _has_white(pattern.colors) and not info.rgbw:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="rgbw_effect_unsupported",
+                translation_placeholders={"effect": effect, "effects": ", ".join(RGBW_PATTERN_EFFECTS)},
+            )
         try:
             validate_params(get_effect(effect), _effect_params(info, pattern.colors, pattern))
         except DDPError as err:
@@ -298,18 +368,18 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
             ) from err
         await self._apply(brightness or self._attr_brightness, pattern.colors[0], effect, pattern)
 
-    async def _apply(self, brightness: int | None, rgb: RGB | None, effect: str, pattern: Pattern | None) -> None:
+    async def _apply(self, brightness: int | None, color: Color, effect: str, pattern: Pattern | None) -> None:
         """Take the pixels from overlapping lights, then show this look; a failed send keeps the previous one."""
         async with self._runtime.ownership:  # two lights sharing pixels never take them at the same time
             await self._take_pixels()
             async with self._lock:
-                previous = (self._attr_brightness, self._attr_rgb_color, self._attr_effect, self._pattern)
-                self._attr_brightness, self._attr_rgb_color, self._attr_effect = brightness, rgb, effect
+                previous = (self._attr_brightness, self._color, self._attr_effect, self._pattern)
+                self._attr_brightness, self._color, self._attr_effect = brightness, self._fit(color), effect
                 self._pattern = pattern
                 try:
                     await self._send_on()
                 except HomeAssistantError:
-                    self._attr_brightness, self._attr_rgb_color, self._attr_effect, self._pattern = previous
+                    self._attr_brightness, self._color, self._attr_effect, self._pattern = previous
                     raise
                 self._attr_is_on = True
         self.async_write_ha_state()
@@ -341,17 +411,21 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
         self.async_write_ha_state()
 
     async def _send_on(self) -> None:
-        """Send the current brightness, color or pattern, and effect. Caller holds the lock."""
+        """Send the current brightness, color or pattern, and effect. Caller holds the lock.
+
+        An effect that renders RGB only gets the first three channels of an RGBW color (it ignores W).
+        """
         runtime, key, segment = self._runtime, self._config.key, self._config.segment
         brightness = (self._attr_brightness or DEFAULT_BRIGHTNESS) / 255
-        rgb = self._attr_rgb_color or DEFAULT_RGB
+        color = self._color
         info = EFFECTS.get(self._attr_effect or EFFECT_OFF)
         try:
             if info is None:
                 await runtime.stop_runner(key)
-                await runtime.sender.fill(segment, rgb, brightness=brightness)
+                await runtime.sender.fill(segment, color, brightness=brightness)
                 return
-            await self._run_effect(info, _effect_params(info, [rgb], self._pattern), brightness)
+            effect_color = color if info.rgbw else (color[0], color[1], color[2])
+            await self._run_effect(info, _effect_params(info, [effect_color], self._pattern), brightness)
         except DDPError as err:
             raise self._send_error(err) from err
 

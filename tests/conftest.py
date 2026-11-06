@@ -204,7 +204,7 @@ def entry_factory(hass: HomeAssistant, udp_listener: Listener) -> Callable[..., 
 
     With ``controller``, the entry's controller HTTP UI is that fake (``http_port`` is test-only too) and its type is
     ``ndbpro`` unless ``controller_type`` says otherwise; without, it is Generic DDP and gets no Scenes light.
-    ``segments`` replaces the two-output layout.
+    ``segments`` replaces the two-output layout; ``data_type`` "rgbw" makes it a 4-channel strip.
     """
 
     def make(
@@ -213,6 +213,7 @@ def entry_factory(hass: HomeAssistant, udp_listener: Listener) -> Callable[..., 
         controller: FakeController | None = None,
         controller_type: str | None = None,
         segments: list[dict[str, Any]] | None = None,
+        data_type: str = "rgb",
     ) -> MockConfigEntry:
         extra: dict[str, Any] = {CONF_MODEL: "NDB-Pro", CONF_CONTROLLER_TYPE: controller_type or "generic"}
         if controller is not None:
@@ -230,7 +231,7 @@ def entry_factory(hass: HomeAssistant, udp_listener: Listener) -> Callable[..., 
                 "host": "127.0.0.1",
                 "port": udp_listener.port,
                 CONF_PIXEL_COUNT: 122,
-                CONF_DATA_TYPE: "rgb",
+                CONF_DATA_TYPE: data_type,
                 CONF_SEGMENTS: SEGMENTS if segments is None else segments,
                 CONF_MANUFACTURER: "Minleon",
                 CONF_FIRMWARE: "1.2.3",

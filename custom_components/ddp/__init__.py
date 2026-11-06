@@ -60,6 +60,10 @@ CONFIG_VERSION = 2  # the config flow's VERSION
 
 _BYTE = probatio.All(probatio.Coerce(int), probatio.Range(min=0, max=255))
 _RGB = probatio.All(probatio.ExactSequence([_BYTE, _BYTE, _BYTE]), probatio.Coerce(tuple))
+# A pattern color: [r, g, b] or, for an RGBW entry and an effect that takes white, [r, g, b, w].
+_PATTERN_COLOR = probatio.Any(
+    probatio.ExactSequence([_BYTE, _BYTE, _BYTE]), probatio.ExactSequence([_BYTE, _BYTE, _BYTE, _BYTE])
+)
 # A palette color: [r, g, b] or the name of one of the controller's whites.
 _PALETTE_COLOR = probatio.Any(_RGB, probatio.All(probatio.In(NAMED_COLORS), NAMED_COLORS.__getitem__))
 
@@ -159,7 +163,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         entity_domain=LIGHT_DOMAIN,
         schema={
             probatio.Required(ATTR_COLORS): probatio.All(
-                [probatio.ExactSequence([_BYTE, _BYTE, _BYTE])], probatio.Length(min=1, max=MAX_PATTERN_COLORS)
+                [_PATTERN_COLOR], probatio.Length(min=1, max=MAX_PATTERN_COLORS)
             ),
             probatio.Optional(ATTR_BLOCK_SIZE): probatio.All(probatio.Coerce(int), probatio.Range(min=1)),
             probatio.Optional(ATTR_EFFECT): str,
