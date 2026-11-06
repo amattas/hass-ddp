@@ -18,8 +18,11 @@ from aioddp import DDPSendError, process_frame
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_COLOR_MODE,
+    ATTR_COLOR_TEMP_KELVIN,
     ATTR_EFFECT,
     ATTR_EFFECT_LIST,
+    ATTR_MAX_COLOR_TEMP_KELVIN,
+    ATTR_MIN_COLOR_TEMP_KELVIN,
     ATTR_RGB_COLOR,
     ATTR_SUPPORTED_COLOR_MODES,
     SERVICE_TURN_OFF,
@@ -297,13 +300,13 @@ async def test_power_and_scene_command_the_controller(
 
 
 @pytest.mark.parametrize(
-    ("shown", "mode", "state", "rgb"),
+    ("shown", "mode", "state", "color_mode", "value"),
     [
-        ("#000000", "color", STATE_OFF, None),
-        ("#feffff", "cool_white", STATE_ON, None),
-        ("#c69740", "warm_white", STATE_ON, None),  # what the colors page shows once Warm White is set
-        ("#ffffff", "warm_white", STATE_ON, None),
-        ("#123456", "color", STATE_ON, (0x12, 0x34, 0x56)),
+        ("#000000", "color", STATE_OFF, ColorMode.RGB, None),
+        ("#feffff", "cool_white", STATE_ON, ColorMode.COLOR_TEMP, 6500),
+        ("#c69740", "warm_white", STATE_ON, ColorMode.COLOR_TEMP, 2700),  # the colors page once Warm White is set
+        ("#ffffff", "warm_white", STATE_ON, ColorMode.COLOR_TEMP, 2700),
+        ("#123456", "color", STATE_ON, ColorMode.RGB, (0x12, 0x34, 0x56)),
     ],
     ids=["empty", "cool-white", "warm-white-shown", "warm-white-sent", "color"],
 )
@@ -314,7 +317,8 @@ async def test_color_and_mode_read_their_palette_slot(
     shown: str,
     mode: str,
     state: str,
-    rgb: tuple[int, int, int] | None,
+    color_mode: ColorMode,
+    value: int | tuple[int, int, int] | None,
 ) -> None:
     fake_controller.set_color(2, shown)
     entry = entry_factory(controller=fake_controller)
@@ -322,14 +326,16 @@ async def test_color_and_mode_read_their_palette_slot(
 
     select = _state(hass, MODES[1])
     assert (select.state, select.attributes["options"]) == (mode, MODE_OPTIONS)
-    # A white makes Color 2 an on/off light; Color makes it an RGB light.
-    color_mode = ColorMode.RGB if mode == "color" else ColorMode.ONOFF
+    # Color 2 has a Color and a Temperature tab: a white reads as warm 2700 K or cool 6500 K.
     color = _state(hass, COLORS[1])
-    assert (color.state, color.attributes[ATTR_SUPPORTED_COLOR_MODES]) == (state, [color_mode])
+    assert color.state == state
+    assert color.attributes[ATTR_SUPPORTED_COLOR_MODES] == [ColorMode.COLOR_TEMP, ColorMode.RGB]
+    assert (color.attributes[ATTR_MIN_COLOR_TEMP_KELVIN], color.attributes[ATTR_MAX_COLOR_TEMP_KELVIN]) == (2700, 6500)
     assert ATTR_EFFECT_LIST not in color.attributes
     if state == STATE_ON:
-        assert (color.attributes[ATTR_COLOR_MODE], color.attributes.get(ATTR_RGB_COLOR)) == (color_mode, rgb)
-        assert color.attributes.get(ATTR_BRIGHTNESS) == (255 if mode == "color" else None)
+        attribute = ATTR_RGB_COLOR if color_mode is ColorMode.RGB else ATTR_COLOR_TEMP_KELVIN
+        assert (color.attributes[ATTR_COLOR_MODE], color.attributes[attribute]) == (color_mode, value)
+        assert color.attributes[ATTR_BRIGHTNESS] == 255
     assert _state(hass, COLORS[0]).attributes[ATTR_RGB_COLOR] == (0xBE, 0x38, 0xF3)  # its own slot only
     assert _state(hass, MODES[0]).state == "color"
     assert await hass.config_entries.async_unload(entry.entry_id)
@@ -344,24 +350,58 @@ def _light(service: str, **data: Any) -> tuple[str, str, int, dict[str, Any]]:
 
 
 @pytest.mark.parametrize(
-    ("shown", "restored", "command", "sent", "state", "mode"),
+    ("shown", "restored", "commands", "sent", "state", "mode"),
     [
         # Color mode: an RGB light.
-        ("#000000", None, _light(SERVICE_TURN_ON, rgb_color=(255, 0, 0)), "#ff0000", STATE_ON, "color"),
-        ("#000000", None, _light(SERVICE_TURN_ON, rgb_color=(255, 0, 0), brightness=128), "#800000", STATE_ON, "color"),
-        ("#123456", None, _light(SERVICE_TURN_ON, brightness=51), "#040a11", STATE_ON, "color"),  # its color, scaled
-        ("#123456", None, _light(SERVICE_TURN_OFF), "#000000", STATE_OFF, "color"),
-        ("#000000", [0, 0, 255], _light(SERVICE_TURN_ON), "#0000ff", STATE_ON, "color"),  # the restored last color
-        ("#000000", [254, 255, 255], _light(SERVICE_TURN_ON), "#feffff", STATE_ON, "cool_white"),  # a white comes back
-        ("#000000", None, _light(SERVICE_TURN_ON), "#ff0000", STATE_ON, "color"),  # none: red (white is a mode)
-        # A white mode: an on/off light that re-sends the white (a color is not offered) and clears the slot off.
-        ("#c69740", None, _light(SERVICE_TURN_ON), "#ffffff", STATE_ON, "warm_white"),
-        ("#feffff", None, _light(SERVICE_TURN_ON, rgb_color=(255, 0, 0)), "#feffff", STATE_ON, "cool_white"),
-        ("#feffff", None, _light(SERVICE_TURN_OFF), "#000000", STATE_OFF, "color"),
-        # Mode N: a white is sent at once; Color clears the slot until a color is picked.
-        ("#123456", None, _mode("warm_white"), "#ffffff", STATE_ON, "warm_white"),
-        ("#000000", None, _mode("cool_white"), "#feffff", STATE_ON, "cool_white"),
-        ("#feffff", None, _mode("color"), "#000000", STATE_OFF, "color"),
+        ("#000000", None, [_light(SERVICE_TURN_ON, rgb_color=(255, 0, 0))], ["#ff0000"], STATE_ON, "color"),
+        (
+            "#000000",
+            None,
+            [_light(SERVICE_TURN_ON, rgb_color=(255, 0, 0), brightness=128)],
+            ["#800000"],
+            STATE_ON,
+            "color",
+        ),
+        ("#123456", None, [_light(SERVICE_TURN_ON, brightness=51)], ["#040a11"], STATE_ON, "color"),  # scaled
+        ("#123456", None, [_light(SERVICE_TURN_OFF)], ["#000000"], STATE_OFF, "color"),
+        ("#000000", {"last_color": [0, 0, 255]}, [_light(SERVICE_TURN_ON)], ["#0000ff"], STATE_ON, "color"),
+        # The restored last color can be a white: it comes back.
+        ("#000000", {"last_color": [254, 255, 255]}, [_light(SERVICE_TURN_ON)], ["#feffff"], STATE_ON, "cool_white"),
+        ("#000000", None, [_light(SERVICE_TURN_ON)], ["#ff0000"], STATE_ON, "color"),  # none: red (white is a mode)
+        # A temperature picks a white (up to 4600 K warm, above cool), sent exact; any brightness is ignored.
+        ("#000000", None, [_light(SERVICE_TURN_ON, color_temp_kelvin=2700)], ["#ffffff"], STATE_ON, "warm_white"),
+        ("#123456", None, [_light(SERVICE_TURN_ON, color_temp_kelvin=4600)], ["#ffffff"], STATE_ON, "warm_white"),
+        (
+            "#000000",
+            None,
+            [_light(SERVICE_TURN_ON, color_temp_kelvin=4601, brightness=128)],
+            ["#feffff"],
+            STATE_ON,
+            "cool_white",
+        ),
+        ("#c69740", None, [_light(SERVICE_TURN_ON, color_temp_kelvin=6500)], ["#feffff"], STATE_ON, "cool_white"),
+        # On a white: bare re-sends the white exact (brightness too), a color leaves it, off clears the slot.
+        ("#c69740", None, [_light(SERVICE_TURN_ON)], ["#ffffff"], STATE_ON, "warm_white"),
+        ("#feffff", None, [_light(SERVICE_TURN_ON, brightness=51)], ["#feffff"], STATE_ON, "cool_white"),
+        ("#feffff", None, [_light(SERVICE_TURN_ON, rgb_color=(255, 0, 0))], ["#ff0000"], STATE_ON, "color"),
+        ("#feffff", None, [_light(SERVICE_TURN_OFF)], ["#000000"], STATE_OFF, "color"),
+        # Mode N: a white is sent at once; Color re-sends the slot's last custom color (default red), and sends
+        # nothing when the slot already holds a custom color or is empty.
+        ("#123456", None, [_mode("warm_white")], ["#ffffff"], STATE_ON, "warm_white"),
+        ("#000000", None, [_mode("cool_white")], ["#feffff"], STATE_ON, "cool_white"),
+        ("#123456", None, [_mode("warm_white"), _mode("color")], ["#ffffff", "#123456"], STATE_ON, "color"),
+        ("#feffff", {"last_color": [0, 0, 255]}, [_mode("color")], ["#0000ff"], STATE_ON, "color"),
+        (
+            "#feffff",
+            {"last_color": [254, 255, 255], "last_custom": [0, 0, 255]},
+            [_mode("color")],
+            ["#0000ff"],
+            STATE_ON,
+            "color",
+        ),
+        ("#feffff", None, [_mode("color")], ["#ff0000"], STATE_ON, "color"),
+        ("#123456", None, [_mode("color")], [], STATE_ON, "color"),
+        ("#000000", None, [_mode("color")], [], STATE_OFF, "color"),
     ],
     ids=[
         "rgb",
@@ -371,12 +411,22 @@ def _light(service: str, **data: Any) -> tuple[str, str, int, dict[str, Any]]:
         "bare-restored",
         "bare-restored-white",
         "bare-default",
-        "white-on",
-        "white-ignores-rgb",
+        "kelvin-2700",
+        "kelvin-4600",
+        "kelvin-4601-brightness",
+        "kelvin-6500",
+        "white-bare",
+        "white-brightness",
+        "white-rgb",
         "white-off",
         "mode-warm-white",
         "mode-cool-white",
-        "mode-color",
+        "mode-color-after-white",
+        "mode-color-restored-last-color",
+        "mode-color-restored-last-custom",
+        "mode-color-default",
+        "mode-color-on-custom",
+        "mode-color-on-empty",
     ],
 )
 async def test_color_and_mode_set_their_palette_slot(
@@ -384,32 +434,41 @@ async def test_color_and_mode_set_their_palette_slot(
     fake_controller: FakeController,
     entry_factory: Callable[..., MockConfigEntry],
     shown: str,
-    restored: list[int] | None,
-    command: tuple[str, str, int, dict[str, Any]],
-    sent: str,
+    restored: dict[str, list[int]] | None,
+    commands: list[tuple[str, str, int, dict[str, Any]]],
+    sent: list[str],
     state: str,
     mode: str,
 ) -> None:
     if restored is not None:
-        mock_restore_cache_with_extra_data(hass, [(State(COLORS[1], STATE_OFF), {"last_color": restored})])
+        mock_restore_cache_with_extra_data(hass, [(State(COLORS[1], STATE_OFF), restored)])
     fake_controller.set_color(2, shown)
     entry = entry_factory(controller=fake_controller)
     await _setup(hass, entry)
     await _call(hass, SERVICE_TURN_ON, OUT1, rgb_color=(0, 255, 0))
     fake_controller.requests.clear()
 
-    domain, service, index, data = command
-    await _call(hass, service, (MODES if domain == "select" else COLORS)[index], domain=domain, **data)
+    for domain, service, index, data in commands:
+        await _call(hass, service, (MODES if domain == "select" else COLORS)[index], domain=domain, **data)
 
-    assert fake_controller.commands() == [_color(2, sent)]
-    slot = [int(sent[i : i + 2], 16) for i in (1, 3, 5)]
+    assert fake_controller.commands() == [_color(2, color) for color in sent]
+    final = sent[-1] if sent else shown
+    slot = [int(final[i : i + 2], 16) for i in (1, 3, 5)]
     for _ in range(2):  # the command's published palette, then the poll reading the page back
         color = _state(hass, COLORS[1])
         assert (color.state, _state(hass, MODES[1]).state) == (state, mode)
-        if mode == "color" and state == STATE_ON:
-            assert list(color.attributes[ATTR_RGB_COLOR]) == slot
+        # The light's color mode agrees with Mode: a white is a temperature, anything else a color.
+        if state == STATE_ON and mode == "color":
+            assert (color.attributes[ATTR_COLOR_MODE], list(color.attributes[ATTR_RGB_COLOR])) == (ColorMode.RGB, slot)
+        elif state == STATE_ON:
+            kelvin = 2700 if mode == "warm_white" else 6500
+            assert (color.attributes[ATTR_COLOR_MODE], color.attributes[ATTR_COLOR_TEMP_KELVIN]) == (
+                ColorMode.COLOR_TEMP,
+                kelvin,
+            )
         # Power's palette attribute updates at once; the other slots and DDP are untouched.
-        assert _state(hass, POWER).attributes["colors"] == [FIXTURE_COLORS[0], slot, EMPTY, EMPTY, EMPTY]
+        if sent:
+            assert _state(hass, POWER).attributes["colors"] == [FIXTURE_COLORS[0], slot, EMPTY, EMPTY, EMPTY]
         assert _state(hass, COLORS[0]).state == STATE_ON
         assert _state(hass, OUT1).state == STATE_ON
         await _poll(entry)
