@@ -26,9 +26,10 @@ one registry entry). See `DECISIONS.md`.
 - `commands.py`: `ControllerCommands`, the controller commands shared by the controller device's entities (turn on
   with an effect, turn off = the controller's Off plus blanking the DDP-driven segments, recall a preset, set the
   palette or one slot). A command that starts a scene hands the pixels back from DDP once the controller took it.
-  Everything runs under the coordinator lock and publishes the result
+  Everything runs under the coordinator lock and publishes the result; `follow_poll` (the coordinator's `on_poll`,
+  registered at setup) shows on the DDP lights a scene started or stopped outside HA
 - `coordinator.py`: `DDPScenesCoordinator` (30 s poll of the controller state and palette); `lock` serializes polls and
-  commands, so a stale poll cannot undo a command; `on_poll` hook (the controller light follows external changes);
+  commands, so a stale poll cannot undo a command; `on_poll` hook (`ControllerCommands.follow_poll`);
   `last_effect`. `diagnostics.py`: redacted entry, sender, and controller documents
 - `entity.py`: `DDPEntity` base (unique IDs). Two devices per vendor entry: the DDP device `(DOMAIN, host)`, named
   "<title> Generic DDP" (the title alone for Generic), and the controller device `(DOMAIN, host:controller)`, linked
@@ -41,7 +42,7 @@ one registry entry). See `DECISIONS.md`.
   aioddp effects, `ddp.set_pattern` (kept in restore state); a `source` of `off`/`ddp`/`scene`/`blanked` (see
   DECISIONS.md 2026-11-06); `AllOutputsLight` over the whole strip when there is more than one segment (DDP lights
   that share pixels hand them to each other without sending); `ScenesLight`, the controller device's main entity (no
-  name; `on_poll`, `ddp.recall_preset`, `ddp.set_colors`); `PaletteLight` "Color 1".."Color 5", one palette slot
+  name; `ddp.recall_preset`, `ddp.set_colors`); `PaletteLight` "Color 1".."Color 5", one palette slot
   each, RGB plus the named whites as effects
 - `switch.py`: `PowerSwitch` (controller on/off). `select.py`: `SceneSelect` (the controller's effects)
 - Design spec: `docs/superpowers/specs/2026-10-28-hass-ddp-design.md` (this release is a smaller cut of it)

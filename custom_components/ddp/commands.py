@@ -4,10 +4,12 @@ Every command runs under the coordinator's lock (so a stale poll cannot undo it)
 command that starts a scene hands the pixels back from DDP once the controller took it: every DDP light shows the
 scene, sending nothing, and the held pixels follow (``DDPRuntime.sync_holds``). Turning the controller off blanks
 the DDP-driven segments first. The palette is the controller's own setting, so palette commands leave DDP alone.
+``follow_poll`` is the coordinator's ``on_poll``: a scene started or stopped outside HA reaches the DDP lights.
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
@@ -22,6 +24,7 @@ from .coordinator import DDPScenesCoordinator, SceneState
 if TYPE_CHECKING:
     from . import DDPRuntime
 
+_LOGGER = logging.getLogger(__name__)
 ALL_SOURCES = tuple(LightSource)
 
 
@@ -150,6 +153,35 @@ class ControllerCommands:
             colors = list(data.colors)
             colors[slot - 1] = color
             self._publish(colors=tuple(colors))
+
+    async def follow_poll(self, previous: SceneState | None, state: SceneState) -> None:
+        """Show on the DDP lights a scene started or stopped outside HA (the controller's own UI or schedule).
+
+        The coordinator's ``on_poll``: it runs under the coordinator's lock before the poll publishes, so commands
+        never trigger it. A new scene takes every ``off`` and ``ddp`` light (blanked ones keep their black). Any poll
+        of a running scene also shows it on every ``off`` light that holds no pixels (released, so the controller
+        lights them again); ``ddp`` lights are then left alone, since DDP may be overriding that scene. "Off" turns
+        the lights showing or blanking a scene off and leaves ``ddp`` lights running.
+        """
+        if state.effect is None:
+            return
+        before = previous.effect if previous is not None else None
+        runtime = self._runtime
+        lights = runtime.segment_lights
+        sources: tuple[LightSource, ...] = (LightSource.OFF, LightSource.DDP)
+        target = LightSource.SCENE
+        if state.effect == CONTROLLER_OFF:
+            sources, target = (LightSource.SCENE, LightSource.BLANKED), LightSource.OFF
+        elif before is None or before == state.effect:
+            # Decided before any light changes: one light showing the scene would make the others stop holding.
+            lights = [light for light in lights if light.source is LightSource.OFF and not light.holding]
+        async with runtime.ownership:
+            for light in lights:
+                await light.async_follow_scene(target, sources)
+            try:
+                await runtime.sync_holds()
+            except DDPError as err:  # the poll itself succeeded; the next change syncs again
+                _LOGGER.warning("Could not send black to the off DDP lights of %s: %s", self.coordinator.name, err)
 
     def _publish(self, **changes: Any) -> None:
         """Publish a commanded change as the coordinator's data, keeping everything the command did not change."""

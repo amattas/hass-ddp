@@ -38,7 +38,7 @@ from pytest_homeassistant_custom_component.common import (
 
 from custom_components.ddp.const import DOMAIN
 
-from .conftest import SEGMENTS, Listener
+from .conftest import SEGMENTS, FakeController, Listener, assert_holds_follow_lights
 
 OUT1 = "light.ndb_pro_output_1"
 OUT2 = "light.ndb_pro_output_2"
@@ -541,3 +541,25 @@ async def test_turn_off_of_an_off_light_leaves_the_pixels_of_an_overlapping_ligh
     assert not any(p.offset == 0 and p.data == bytes(len(p.data)) for p in udp_listener.packets)
     red = process_frame(bytes(RED) * (122 if on == ALL else 80), setup_entry.runtime_data.sender.strip)
     assert [p.data for p in udp_listener.packets if p.offset == 0][-1] == red
+
+
+@pytest.mark.parametrize("vendor", [False, True], ids=["generic", "vendor"])
+async def test_concurrent_take_holds_black_for_the_off_outputs(
+    hass: HomeAssistant,
+    udp_listener: Listener,
+    fake_controller: FakeController,
+    entry_factory: Callable[..., MockConfigEntry],
+    vendor: bool,
+) -> None:
+    # All outputs' chase is stopped (Output 1 takes its pixels) before its first frame: its range was never sent, so
+    # the off Output 2 must still get black and stay held.
+    entry = entry_factory(controller=fake_controller if vendor else None)
+    await _setup(hass, entry)
+    prefix = "light.ndb_pro_generic_ddp_" if vendor else "light.ndb_pro_"
+    out1, all_outputs = f"{prefix}output_1", f"{prefix}all_outputs"
+
+    await asyncio.gather(_turn_on(hass, all_outputs, effect="chase"), _turn_on(hass, out1, rgb_color=RED))
+    await udp_listener.settle()
+
+    assert_holds_follow_lights(entry.runtime_data)
+    assert await hass.config_entries.async_unload(entry.entry_id)

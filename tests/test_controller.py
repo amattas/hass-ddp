@@ -47,7 +47,7 @@ from custom_components.ddp.const import DOMAIN, LightSource
 from custom_components.ddp.controller import detect, fetch_layout
 from custom_components.ddp.coordinator import SCAN_INTERVAL
 
-from .conftest import FakeController, Listener
+from .conftest import FakeController, Listener, assert_holds_follow_lights, bytes_of
 
 SCENES = "light.ndb_pro_minleon_ndb_pro"  # the controller device "NDB-Pro Minleon NDB-Pro"'s main entity
 POWER = "switch.ndb_pro_minleon_ndb_pro_power"
@@ -538,6 +538,23 @@ async def test_scene_takes_the_pixels_back_from_ddp(
     assert udp_listener.packets == []
 
 
+async def test_polled_scene_reaches_the_ddp_lights_with_the_controller_light_disabled(
+    hass: HomeAssistant, entity_registry: er.EntityRegistry, fake_controller: FakeController, ndb_entry: MockConfigEntry
+) -> None:
+    # The poll hook belongs to the commands, not to the controller light: disabling that light keeps polls working.
+    entity_registry.async_update_entity(SCENES, disabled_by=er.RegistryEntryDisabler.USER)
+    assert await hass.config_entries.async_reload(ndb_entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(SCENES) is None
+    await _call(hass, SERVICE_TURN_ON, OUT1, rgb_color=(255, 0, 0))
+
+    await _poll_after(fake_controller, ndb_entry, "Show1")
+
+    assert [light.source for light in ndb_entry.runtime_data.segment_lights][0] is LightSource.SCENE
+    assert _state(hass, OUT1).state == STATE_ON
+    assert ndb_entry.runtime_data.runners == {}
+
+
 async def test_segment_turned_on_during_hand_back_keeps_its_keepalive(
     hass: HomeAssistant, udp_listener: Listener, ndb_entry: MockConfigEntry
 ) -> None:
@@ -681,19 +698,19 @@ async def test_all_outputs_turned_off_during_a_scene_blanks_the_strip(
     assert await _keepalive_ranges(udp_listener) == set()
 
 
-def _bytes_of(strip: Any, segments: list[Any]) -> set[int]:
-    return {b for s in segments for b in range(strip.byte_offset(s), strip.byte_offset(s) + strip.byte_length(s))}
-
-
 @pytest.mark.parametrize("seed", range(6))
+@pytest.mark.parametrize("concurrent", [False, True], ids=["sequential", "gather"])
 async def test_held_pixels_follow_the_light_states(
     hass: HomeAssistant,
+    udp_listener: Listener,
     fake_controller: FakeController,
     fast_keepalive_entry: MockConfigEntry,
     seed: int,
+    concurrent: bool,
 ) -> None:
-    # Random commands and polls (fixed seeds): after each one the sender holds exactly the pixels of the lights that
-    # hold, and a light showing the scene has no pixel held but those a light sharing them drives or blanks.
+    # Random commands and polls (fixed seeds), one at a time or two or three at once (an HA scene applies lights
+    # concurrently): once they settle the sender holds exactly the pixels of the lights that hold, and a light showing
+    # the scene has no pixel held but those a light sharing them drives or blanks.
     runtime = fast_keepalive_entry.runtime_data
     sender, strip = runtime.sender, runtime.sender.strip
     rng = random.Random(seed)  # noqa: S311
@@ -709,16 +726,16 @@ async def test_held_pixels_follow_the_light_states(
         lambda e: _call(hass, SERVICE_TURN_OFF, e),
     ]
     for step in range(40):
-        await rng.choice(ops)(rng.choice(DDP_LIGHTS))
-        await asyncio.sleep(0.1)  # an effect's first frame
+        count = rng.randint(2, 3) if concurrent else 1
+        await asyncio.gather(*(rng.choice(ops)(rng.choice(DDP_LIGHTS)) for _ in range(count)))
+        await udp_listener.settle()  # an effect's first frame
+        assert_holds_follow_lights(runtime, step)
         lights = runtime.segment_lights
-        report = (step, [(light.entity_id, light.source.value) for light in lights], sender._held)
-        held = {b for offset, length in sender._held for b in range(offset, offset + length)}
-        assert held == _bytes_of(strip, [light.segment for light in lights if light.holding]), report
+        held = {b for offset, length in sender.held for b in range(offset, offset + length)}
         for light in lights:
             if light.source is LightSource.SCENE:
                 taken = [o.segment for o in lights if o.source in (LightSource.DDP, LightSource.BLANKED)]
-                assert held & _bytes_of(strip, [light.segment]) <= _bytes_of(strip, taken), (light.entity_id, report)
+                assert held & bytes_of(strip, [light.segment]) <= bytes_of(strip, taken), (light.entity_id, step)
 
 
 async def _poll_after(fake_controller: FakeController, entry: MockConfigEntry, effect: str) -> None:

@@ -63,7 +63,8 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
 - Implementation notes (2026-11-06): ownership hand-over applies to `ddp` and `scene` lights (both go `off`, sending
   nothing; a `blanked` light keeps its black), so All outputs goes off when an output takes its pixels over a running
   scene, and the outputs go off when All outputs does. A poll runs the DDP-light changes under the
-  coordinator's lock before it publishes (`DDPScenesCoordinator.on_poll`, set by the Scenes light), so commands never
+  coordinator's lock before it publishes (`DDPScenesCoordinator.on_poll`, set by the Scenes light; since moved to the
+  commands, see below), so commands never
   trigger them; "scene start" (a change to a different non-Off effect) takes `off` and `ddp` lights. Every other poll
   of a running scene moves the `off` lights that hold no range to `scene` (released, so the controller lights them
   again ~20 s later) and never touches `ddp` lights, since DDP may be overriding that effect. Setup moves only idle
@@ -73,10 +74,13 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
 - Held pixels (2026-11-06, after a verifier found them drifting): which ranges keepalive resends is a pure function of
   the lights' state, not of events. `DDPRuntime.sync_holds()` runs under the ownership lock at the end of every change
   (turn_on, turn_off, un-blank, a poll's changes, the Scenes light's commands): the wanted set is the segments of the
-  lights whose `holding` is true (`ddp`, `blanked`, or `off` while no scene runs and another light is `ddp`);
-  `runtime.held` records which light keys the sender holds. A held range nothing wants is released; an `off` or
-  `blanked` light that should hold but does not gets black, sent only where nothing is held, so a `ddp` light never
-  gets black over it. Consequence: with no scene running, turning one output on over DDP sends black once to the other
+  lights whose `holding` is true (`ddp`, `blanked`, or `off` while no scene runs and another light is `ddp`).
+  The held pixels are read from the sender (`DDPSender.held`, byte ranges divided by the strip's channels), never
+  from bookkeeping: a runner stopped before its first frame (concurrent turn_ons of All outputs and an output) never
+  held its range, and a `runtime.held` dict that assumed it did left the other output unblanked and unheld. A held
+  range nothing wants is released; an `off` or `blanked` light that should hold gets black wherever neither the
+  sender holds the pixels nor a `ddp` light covers them (a `ddp` light whose runner has not sent yet still counts as
+  covered, so it never gets black). Consequence: with no scene running, turning one output on over DDP sends black once to the other
   off outputs and holds it (before, an output that had never been sent stayed unheld), and a poll that sees the
   controller go `Off` holds black for the outputs that showed the scene while another light is `ddp`. Setup and
   unload still send nothing (restore re-sends a `ddp` light but does not sync).
@@ -101,8 +105,9 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
   palette or one slot) lives in `commands.py` (`ControllerCommands`, `runtime.commands`), shared by the light, Power,
   Scene and the Color lights; the hand-back to the scene and `sync_holds` are unchanged. The last scene for a bare
   turn_on is the coordinator's `last_effect` (any poll or command that saw a non-Off effect), restored by the
-  controller light's extra data, so Power on finds it too. Polls still reach the DDP lights only through the
-  controller light's `on_poll`. A slot command publishes the new palette (no read-back), except before the first
+  controller light's extra data, so Power on finds it too. Polls reach the DDP lights through
+  `ControllerCommands.follow_poll`, which setup registers as the coordinator's `on_poll` (cleared on unload), so
+  disabling the controller light no longer stops polls from moving the DDP lights. A slot command publishes the new palette (no read-back), except before the first
   read, when the other slots are unknown and the palette is read back. A Color light's bare turn_on sends the slot's
   last non-empty color (restore extra data `last_color`; a named white is remembered as its exact value), white
   `(255, 255, 255)` (Warm White) by default; a brightness scales the color sent, a named white is always sent exact.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -89,8 +90,8 @@ class DDPRuntime:
     ``commands`` (the controller device's entities share them) command it.
     ``segment_lights`` is every DDP light (the per-output lights and, with several outputs, All outputs), so the
     controller light can hand the pixels back from DDP. ``ownership`` serializes a DDP light taking pixels that
-    another DDP light shares. The sender keeps resending (keepalive) only the pixels a DDP light holds: ``held`` is
-    each light key whose segment the sender holds, and ``sync_holds`` makes it follow the lights' state.
+    another DDP light shares. The sender keeps resending (keepalive) only the pixels it holds (``DDPSender.held``), and
+    ``sync_holds`` makes them follow the lights' state.
     """
 
     sender: DDPSender
@@ -102,7 +103,6 @@ class DDPRuntime:
     runners: dict[str, EffectRunner] = field(default_factory=dict)
     segment_lights: list[DDPSegmentLight] = field(default_factory=list)
     ownership: asyncio.Lock = field(default_factory=asyncio.Lock)
-    held: dict[str, Segment] = field(default_factory=dict)
 
     @property
     def scene_running(self) -> bool:
@@ -112,29 +112,29 @@ class DDPRuntime:
     async def sync_holds(self) -> None:
         """Make the held pixels exactly those of the lights that hold (``holding``). Caller holds ``ownership``.
 
-        A held range no holding light covers is released (the controller's own effect takes it back after its DDP
-        timeout); an off or blanked light that should hold but does not gets black, sent only where nothing is held,
-        so a ``ddp`` light never gets black over it. A ``ddp`` light's own sends hold its range. Raises ``DDPError``.
+        The held pixels are read from the sender (``DDPSender.held``), never from bookkeeping: a runner stopped before
+        its first frame never held its range. A held range no holding light covers is released (the controller's own
+        effect takes it back after its DDP timeout); an off or blanked light that should hold gets black where nothing
+        is held. A ``ddp`` light's pixels count as covered even before its runner's first frame, so they never get
+        black. Raises ``DDPError``.
         """
-        holding = {light.key: light for light in self.segment_lights if light.holding}
+        holding = [light for light in self.segment_lights if light.holding]
         if not holding:
             self.sender.release()
-            self.held.clear()
             return
-        keep = [light.segment for light in holding.values()]
-        held = list(self.held.values())  # releasing below never drops a pixel of ``keep``
-        for key in [key for key in self.held if key not in holding]:
-            for start, end in _uncovered(self.held.pop(key), keep):
+        channels = self.sender.strip.channels
+        held = [Segment(_HELD, offset // channels, length // channels) for offset, length in self.sender.held]
+        keep = [light.segment for light in holding]
+        for segment in held:
+            for start, end in _uncovered(segment, keep):
                 self.sender.release(Segment(_HELD, start, end - start))
-        # The ``ddp`` lights first: their pixels are held by their own frames and must never get black.
-        for key, light in sorted(holding.items(), key=lambda item: item[1].source is not LightSource.DDP):
-            if key in self.held:
+        covered = [*held, *(light.segment for light in holding if light.source is LightSource.DDP)]
+        for light in holding:
+            if light.source is LightSource.DDP:
                 continue
-            if light.source is not LightSource.DDP:
-                for start, end in _uncovered(light.segment, held):
-                    await self.sender.off(Segment(_HELD, start, end - start))
-            self.held[key] = light.segment
-            held.append(light.segment)
+            for start, end in _uncovered(light.segment, covered):
+                await self.sender.off(Segment(_HELD, start, end - start))
+            covered.append(light.segment)
 
     async def stop_runner(self, key: str) -> None:
         """Stop and forget the runner for ``key``, if any. Never blanks the segment."""
@@ -262,8 +262,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
         # Not a setup gate: the DDP lights don't need the controller's HTTP UI, so a silent one leaves the controller
         # device's entities unavailable until a poll reaches them, instead of failing the entry.
         await scenes.async_refresh()
+        # Polls reach the DDP lights through the commands, whichever controller entities are enabled.
+        scenes.on_poll = runtime.commands.follow_poll
+        entry.async_on_unload(_stop_following(scenes))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+def _stop_following(scenes: DDPScenesCoordinator) -> Callable[[], None]:
+    """An unload callback that detaches the poll hook."""
+
+    def stop() -> None:
+        scenes.on_poll = None
+
+    return stop
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:

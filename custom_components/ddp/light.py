@@ -544,7 +544,6 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
                     await runtime.sender.off(self._config.segment)
                 except DDPError as err:
                     raise self._send_error(err) from err
-                runtime.held[self.key] = self.segment
                 self._source = LightSource.BLANKED if blank else LightSource.OFF
             if blank:
                 for light in self._covered():
@@ -565,7 +564,6 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
                     await runtime.sender.off(self._config.segment)
                 except DDPError as err:
                     raise self._send_error(err) from err
-                runtime.held[self.key] = self.segment
             self._source = LightSource.OFF
         self.async_write_ha_state()
 
@@ -610,7 +608,6 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
                 await self._run_effect(info, _effect_params(info, [effect_color], self._pattern), brightness)
         except DDPError as err:
             raise self._send_error(err) from err
-        runtime.held[key] = segment  # the frames hold it
 
     async def _run_effect(self, info: EffectInfo, params: Mapping[str, Any], brightness: float) -> None:
         """Update this light's runner in place if it runs ``info``, else start one with ``params``."""
@@ -685,40 +682,6 @@ class ScenesLight(ControllerEntity, LightEntity, RestoreEntity):
         last = extra.as_dict().get(ATTR_LAST_EFFECT) if extra is not None else None
         if self.coordinator.last_effect is None and isinstance(last, str) and last != CONTROLLER_OFF:
             self.coordinator.last_effect = last
-        self.coordinator.on_poll = self._follow_poll
-        self.async_on_remove(self._stop_following)
-
-    @callback
-    def _stop_following(self) -> None:
-        self.coordinator.on_poll = None
-
-    async def _follow_poll(self, previous: SceneState | None, state: SceneState) -> None:
-        """Show on the DDP lights a scene started or stopped outside HA (the controller's own UI or schedule).
-
-        A new scene takes every ``off`` and ``ddp`` light (blanked ones keep their black). Any poll of a running scene
-        also shows it on every ``off`` light that holds no pixels (released, so the controller lights them again);
-        ``ddp`` lights are then left alone, since DDP may be overriding that scene. "Off" turns the lights showing or
-        blanking a scene off and leaves ``ddp`` lights running.
-        """
-        if state.effect is None:
-            return
-        before = previous.effect if previous is not None else None
-        runtime = self._runtime
-        lights = runtime.segment_lights
-        sources: tuple[LightSource, ...] = (LightSource.OFF, LightSource.DDP)
-        target = LightSource.SCENE
-        if state.effect == CONTROLLER_OFF:
-            sources, target = (LightSource.SCENE, LightSource.BLANKED), LightSource.OFF
-        elif before is None or before == state.effect:
-            # Decided before any light changes: one light showing the scene would make the others stop holding.
-            lights = [light for light in lights if light.source is LightSource.OFF and not light.holding]
-        async with runtime.ownership:
-            for light in lights:
-                await light.async_follow_scene(target, sources)
-            try:
-                await runtime.sync_holds()
-            except DDPError as err:  # the poll itself succeeded; the next change syncs again
-                _LOGGER.warning("Could not send black to the off DDP lights of %s: %s", self.entity_id, err)
 
     @property
     def extra_restore_state_data(self) -> ExtraStoredData:
