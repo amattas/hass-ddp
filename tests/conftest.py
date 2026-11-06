@@ -96,6 +96,7 @@ async def udp_listener(socket_enabled: None) -> AsyncIterator[Listener]:
 FIXTURES = Path(__file__).parent / "fixtures" / "ndbpro"
 _EFFECT_BUTTON = re.compile(r"""class='(?:psel|pnsel) button' onclick='fx2b\("([^"]+)",""")
 _INTENSITY_VALUE = re.compile(r"(class='slider Cint' value=')\d+(')")
+_COLOR_CELL = "<td id='bc{}' bgcolor=\"#{}\">"
 
 
 @dataclass
@@ -123,6 +124,13 @@ class FakeController:
             self.pages["/pfx2.html"],
         )
 
+    def set_color(self, slot: int, color: str) -> None:
+        """Show ``color`` (``#rrggbb``) in palette cell ``slot`` (6 is the background), as the colors page does."""
+        page = self.pages["/pcolors.html"]
+        self.pages["/pcolors.html"] = re.sub(
+            rf"<td id='bc{slot}' bgcolor=\"#[0-9a-fA-F]{{6}}\">", _COLOR_CELL.format(slot, color.lstrip("#")), page
+        )
+
     def commands(self) -> list[tuple[str, str, bytes]]:
         """Every request except the page reads a poll makes."""
         return [r for r in self.requests if not (r[0] == "GET" and r[1] in ("/pfx2.html", "/pcolors.html"))]
@@ -145,6 +153,8 @@ class FakeController:
                 command = json.loads(body)
                 if "fx" in command:
                     self.select(command["fx"])
+                if "color" in command:
+                    self.set_color(command["color"]["i"], command["color"]["c"])
                 if "int" in command:
                     self.pages["/pcolors.html"] = _INTENSITY_VALUE.sub(
                         rf"\g<1>{int(command['int'])}\g<2>", self.pages["/pcolors.html"]
@@ -194,6 +204,7 @@ def entry_factory(hass: HomeAssistant, udp_listener: Listener) -> Callable[..., 
 
     With ``controller``, the entry's controller HTTP UI is that fake (``http_port`` is test-only too) and its type is
     ``ndbpro`` unless ``controller_type`` says otherwise; without, it is Generic DDP and gets no Scenes light.
+    ``segments`` replaces the two-output layout; ``data_type`` "rgbw" makes it a 4-channel strip.
     """
 
     def make(
@@ -201,6 +212,8 @@ def entry_factory(hass: HomeAssistant, udp_listener: Listener) -> Callable[..., 
         options: dict[str, Any] | None = None,
         controller: FakeController | None = None,
         controller_type: str | None = None,
+        segments: list[dict[str, Any]] | None = None,
+        data_type: str = "rgb",
     ) -> MockConfigEntry:
         extra: dict[str, Any] = {CONF_MODEL: "NDB-Pro", CONF_CONTROLLER_TYPE: controller_type or "generic"}
         if controller is not None:
@@ -218,8 +231,8 @@ def entry_factory(hass: HomeAssistant, udp_listener: Listener) -> Callable[..., 
                 "host": "127.0.0.1",
                 "port": udp_listener.port,
                 CONF_PIXEL_COUNT: 122,
-                CONF_DATA_TYPE: "rgb",
-                CONF_SEGMENTS: SEGMENTS,
+                CONF_DATA_TYPE: data_type,
+                CONF_SEGMENTS: SEGMENTS if segments is None else segments,
                 CONF_MANUFACTURER: "Minleon",
                 CONF_FIRMWARE: "1.2.3",
                 **extra,

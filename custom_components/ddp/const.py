@@ -49,6 +49,27 @@ DEFAULT_COLOR_ORDER: Final = {DATA_TYPE_RGB: "RGB", DATA_TYPE_RGBW: "RGBW"}
 # Effect name aioddp renders for a plain solid color; hidden from the effect list (HA's EFFECT_OFF means solid).
 SOLID_EFFECT: Final = "solid"
 
+# Unique-ID suffix of the "All outputs" light, which spans the whole strip (entries with more than one segment).
+STRIP_KEY: Final = "strip"
+
 # Actions
 SERVICE_RECALL_PRESET: Final = "recall_preset"
 PRESET_COUNT: Final = 20
+SERVICE_SET_PATTERN: Final = "set_pattern"
+PATTERN_EFFECT: Final = "palette"  # set_pattern's default: repeating blocks of the given colors
+MAX_PATTERN_COLORS: Final = 16
+ATTR_COLORS: Final = "colors"
+ATTR_BLOCK_SIZE: Final = "block_size"
+ATTR_PARAMS: Final = "params"
+SERVICE_SET_COLORS: Final = "set_colors"  # the controller's palette, on the Scenes light
+ATTR_BACKGROUND: Final = "background"
+# set_colors names for the controller's own whites (exact RGB values the vendor maps to its white LEDs)
+COLOR_COOL_WHITE: Final = "cool_white"
+COLOR_WARM_WHITE: Final = "warm_white"
+
+# Device identifier suffix of a vendor controller's own device (Scenes light), next to the DDP device's bare host.
+CONTROLLER_DEVICE_SUFFIX: Final = ":controller"
+
+type RGB = tuple[int, int, int]
+type RGBW = tuple[int, int, int, int]
+type Color = RGB | RGBW  # RGBW only on an entry whose data type is rgbw

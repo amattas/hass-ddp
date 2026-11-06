@@ -18,17 +18,22 @@ one registry entry). See `DECISIONS.md`.
 
 ## Layout
 
-- `__init__.py`: `async_setup` registers the `ddp.recall_preset` entity service; `DDPRuntime` (`entry.runtime_data`):
+- `__init__.py`: `async_setup` registers the `ddp.recall_preset`, `ddp.set_pattern` and `ddp.set_colors` entity
+  services; `DDPRuntime` (`entry.runtime_data`):
   one `Strip`, one open `DDPSender`, segments, fps, runners, the `Controller` built from the entry's stored
   `controller_type` (`None` for Generic) and its `DDPScenesCoordinator`; `async_migrate_entry` (1 -> 2)
 - `coordinator.py`: `DDPScenesCoordinator` (30 s poll of the controller); `lock` serializes polls and commands, so a
-  stale poll cannot undo a command. `entity.py`: `DDPEntity` base (device info, unique IDs). `diagnostics.py`: redacted entry, sender, and controller documents
+  stale poll cannot undo a command. `entity.py`: `DDPEntity` base (unique IDs; two devices per vendor entry: the DDP device `(DOMAIN, host)` for the
+  DDP lights and a controller device `(DOMAIN, host:controller)`, linked by `via_device_id`, for the Scenes light). `diagnostics.py`: redacted entry, sender, and controller documents
 - `controller.py`: controller type registry, `Controller` protocol, `detect`, `create_controller`, `fetch_layout`
 - `config_flow.py`: host -> `aioddp.discover` + `detect` -> controller type step (detected preselected, Generic always
-  offered) -> entry, or manual fallback; reconfigure changes the type; options flow (cap, color order, fps, keepalive)
-- `light.py`: `DDPSegmentLight` (`LightEntity` + `RestoreEntity`), RGB color mode, aioddp effects; `ScenesLight`
-  (a coordinator entity for a vendor controller's built-in effects, `ddp.recall_preset`), which hands the pixels back from DDP by turning
-  segment lights off without sending and calling `DDPSender.release()`
+  offered) -> entry, or manual fallback; reconfigure changes host/type and re-reads the layout; options flow (cap, color order, fps, keepalive)
+- `light.py`: `DDPSegmentLight` (`LightEntity` + `RestoreEntity`), RGB or RGBW color mode from the entry's data type,
+  aioddp effects, `ddp.set_pattern` (multi-color patterns, kept in restore state); `AllOutputsLight` over the whole
+  strip when there is more than one segment (DDP lights that share pixels hand them to each other without sending);
+  `ScenesLight` (a coordinator entity for a vendor controller's built-in effects and 6-slot palette,
+  `ddp.recall_preset`, `ddp.set_colors`), which hands the pixels back from DDP by turning the DDP lights off
+  without sending and calling `DDPSender.release()`
 - Design spec: `docs/superpowers/specs/2026-10-28-hass-ddp-design.md` (this release is a smaller cut of it)
 
 ## Rules

@@ -35,7 +35,7 @@
       },
       "reconfigure": {
         "title": "Reconfigure the controller",
-        "description": "Detected controller: {detected}. Changing the host keeps the device and its lights. Changing the type adds or removes the Scenes light; the DDP lights are kept.",
+        "description": "Detected controller: {detected}. Stored pixel type: {data_type}. Layout the controller reports now: {layout}. Submitting stores the reported layout (pixel type, outputs and pixel count), so a change of the controller's input mode (3 or 4 channels) takes effect; an output that is gone loses its light. When the controller reports no layout (none), the stored layout is kept. Changing the host keeps the device and its lights. Changing the type adds or removes the Scenes light; the DDP lights are kept.",
         "data": {
           "host": "Host",
           "controller_type": "Controller type"
@@ -106,6 +106,24 @@
     },
     "controller_unreachable": {
       "message": "The controller at {host} did not answer: {error}"
+    },
+    "not_a_ddp_light": {
+      "message": "{entity} is a controller Scenes light; set_pattern works only on a DDP output light or All outputs."
+    },
+    "effect_without_colors": {
+      "message": "Effect {effect} takes no colors, so it cannot show a pattern. Effects that can: {effects}"
+    },
+    "invalid_effect_params": {
+      "message": "Invalid pattern for effect {effect}: {error}"
+    },
+    "palette_not_a_controller": {
+      "message": "{entity} is not a controller Scenes light; set_colors works only on a Scenes light."
+    },
+    "rgbw_needs_rgbw_pixels": {
+      "message": "{entity} drives RGB pixels, so pattern colors take red, green, blue only. To use white, switch the controller to a 4-channel input mode and reconfigure the entry."
+    },
+    "rgbw_effect_unsupported": {
+      "message": "Effect {effect} renders RGB only, so its colors take red, green, blue only. Effects that take white: {effects}"
     }
   },
   "services": {
@@ -118,12 +136,55 @@
           "description": "Stored preset number, 1 to 20."
         }
       }
+    },
+    "set_pattern": {
+      "name": "Set pattern",
+      "description": "Shows a repeating pattern of colors on a DDP light, rendered by an effect (palette by default: fixed blocks of the colors). The pattern is kept across restarts; a later color replaces it.",
+      "fields": {
+        "colors": {
+          "name": "Colors",
+          "description": "1 to 16 colors, each a list of red, green, blue from 0 to 255, for example [[255, 0, 0], [0, 255, 0]]. On RGBW pixels a color may add white as a fourth value, for example [255, 0, 0, 0] or [0, 0, 0, 255], with effects that take white (palette)."
+        },
+        "block_size": {
+          "name": "Block size",
+          "description": "Pixels per color block. 1 with two colors is every other pixel. Only effects with blocks (palette) take it."
+        },
+        "effect": {
+          "name": "Effect",
+          "description": "The effect that renders the colors. Effects that take a single color use the first one."
+        },
+        "params": {
+          "name": "Effect parameters",
+          "description": "Other parameters of the effect as a mapping, for example speed: 4 for chase."
+        },
+        "brightness": {
+          "name": "Brightness",
+          "description": "Brightness from 1 to 255. Leave empty to keep the light's brightness."
+        }
+      }
+    },
+    "set_colors": {
+      "name": "Set colors",
+      "description": "Sets the colors the controller's built-in effects use (its palette of 5 custom colors), on a controller Scenes light. The light need not be on, and DDP lights keep the pixels. No colors clears the palette, so the controller picks random colors.",
+      "fields": {
+        "colors": {
+          "name": "Colors",
+          "description": "0 to 5 colors for palette slots 1 to 5; the remaining slots are emptied. Each is a list of red, green, blue from 0 to 255, or cool_white or warm_white for the controller's white LEDs, for example [\"warm_white\", [255, 0, 0]]. An empty list clears the palette, so the controller picks random colors."
+        },
+        "background": {
+          "name": "Background",
+          "description": "The background color as red, green, blue from 0 to 255, for effects that use one. Leave empty to keep it."
+        }
+      }
     }
   },
   "entity": {
     "light": {
       "scenes": {
         "name": "Scenes"
+      },
+      "all_outputs": {
+        "name": "All outputs"
       }
     }
   }

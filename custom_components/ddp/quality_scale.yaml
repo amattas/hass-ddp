@@ -3,7 +3,7 @@ rules:
   # Bronze
   action-setup:
     status: done
-    comment: ddp.recall_preset is registered in async_setup as a platform entity service (light domain).
+    comment: ddp.recall_preset, ddp.set_pattern and ddp.set_colors are registered in async_setup as platform entity services (light domain).
   appropriate-polling:
     status: done
     comment: |
@@ -31,7 +31,7 @@ rules:
       CI, with tagged releases) is out of scope here; aioddp is not yet published to PyPI.
   docs-actions:
     status: done
-    comment: README documents ddp.recall_preset and the light actions it supports (Actions).
+    comment: README documents ddp.set_pattern, ddp.set_colors, ddp.recall_preset, and the light actions it supports (Actions).
   docs-conditions:
     status: exempt
     comment: The integration provides no conditions.
@@ -54,11 +54,14 @@ rules:
       removes itself.
   entity-unique-id:
     status: done
-    comment: Unique IDs are <config entry id>_<segment key>, or <config entry id>_controller for the Scenes light.
+    comment: |
+      Unique IDs are <config entry id>_<segment key>, <config entry id>_strip for All outputs, or
+      <config entry id>_controller for the Scenes light.
   has-entity-name:
     status: done
     comment: |
-      DDPEntity sets _attr_has_entity_name; segment lights are named after their output, the Scenes light is "Scenes".
+      DDPEntity sets _attr_has_entity_name; segment lights are named after their output, All outputs and the Scenes
+      light by translation.
   runtime-data:
     status: done
     comment: DDPConfigEntry = ConfigEntry[DDPRuntime], stored in entry.runtime_data.
@@ -81,8 +84,8 @@ rules:
   action-exceptions:
     status: done
     comment: |
-      Failed sends and controller errors raise HomeAssistantError; unknown effects and recall_preset on a non-Scenes
-      light raise ServiceValidationError.
+      Failed sends and controller errors raise HomeAssistantError; unknown effects, invalid set_pattern effects or
+      params, recall_preset or set_colors on a non-Scenes light, and set_pattern on the Scenes light raise ServiceValidationError.
   config-entry-unloading:
     status: done
     comment: Unload removes the lights (which stop their effect runners) and closes the socket without blanking.
@@ -122,7 +125,9 @@ rules:
   devices:
     status: done
     comment: |
-      One device per entry (identifier: host) with manufacturer, model, and firmware when the controller reports them.
+      The DDP device (identifier: host; the output lights and All outputs) with manufacturer, model, and firmware when
+      the controller reports them. A vendor controller type adds a controller device (identifier: host:controller,
+      named "<entry> <controller type>", via_device_id the DDP device) holding the Scenes light.
   diagnostics:
     status: done
     comment: Entry, sender counters, scenes state, and the controller's raw documents with host, IPs, MAC, and SSID redacted.
@@ -140,7 +145,7 @@ rules:
     comment: README Data updates.
   docs-examples:
     status: done
-    comment: README Examples (scheduled scenes, preset automation, Home Assistant scene).
+    comment: README Examples (scheduled scenes, preset automation, Home Assistant scene, patterns).
   docs-known-limitations:
     status: done
     comment: README Known limitations.
@@ -158,7 +163,9 @@ rules:
     comment: README Use cases.
   dynamic-devices:
     status: exempt
-    comment: Each entry is one fixed controller; its outputs are read when the entry is added.
+    comment: |
+      Each entry is one fixed controller; its outputs are read when the entry is added and again on reconfigure,
+      never at runtime (DDP has no way to announce a change).
   entity-category:
     status: exempt
     comment: Every entity is a primary light; there are no config or diagnostic entities.
@@ -171,25 +178,32 @@ rules:
   entity-translations:
     status: done
     comment: |
-      The Scenes light is named by translation. Segment lights carry the output label read from the controller's layout
-      and stored with the entry (Output 1, All), which is device data rather than a fixed string.
+      The Scenes and All outputs lights are named by translation. Segment lights carry the output label read from the
+      controller's layout and stored with the entry (Output 1, All), which is device data rather than a fixed string.
   exception-translations:
     status: done
     comment: Every raised exception uses a translation_key from strings.json (tests/test_metadata.py checks).
   icon-translations:
     status: done
-    comment: icons.json has the Scenes light and the recall_preset action; segment lights use the default light icon.
+    comment: |
+      icons.json has the Scenes and All outputs lights and every action; segment lights use the default light icon.
   reconfiguration-flow:
     status: done
-    comment: Reconfigure changes the host (moving the device identifier with it) and the controller type.
+    comment: |
+      Reconfigure changes the host (moving both device identifiers with it) and the controller type, and re-reads the
+      layout: a usable one replaces the stored pixel type, outputs, pixel count and device info (a color order option
+      that does not fit the new pixel type is dropped); without one the stored layout is kept, as the form says.
   repair-issues:
     status: exempt
     comment: |
       No user-fixable condition is detected: an unreachable controller is transient and surfaces as an unavailable
-      entity, and the layout is not re-read after setup.
+      entity, and the layout is re-read only when the user reconfigures.
   stale-devices:
-    status: exempt
-    comment: Each entry is one fixed controller device that goes away with the entry.
+    status: done
+    comment: |
+      Reconfiguring to Generic DDP removes the controller device with its Scenes light; a reconfigure whose layout
+      lost an output removes that output's light (and All outputs once one output is left). The DDP device goes away
+      with the entry.
 
   # Platinum
   async-dependency:

@@ -13,3 +13,59 @@ recall_preset:
           max: 20
           step: 1
           mode: box
+set_pattern:
+  target:
+    entity:
+      integration: ddp
+      domain: light
+  fields:
+    colors:
+      required: true
+      example: "[[255, 0, 0], [0, 255, 0]]"
+      selector:
+        object:
+    block_size:
+      example: 1
+      selector:
+        number:
+          min: 1
+          max: 1000
+          step: 1
+          mode: box
+    effect:
+      example: palette
+      default: palette
+      selector:
+        select:
+          options:
+            - palette
+            - chase
+            - breathe
+            - twinkle
+    params:
+      example: '{"speed": 4}'
+      selector:
+        object:
+    brightness:
+      example: 128
+      selector:
+        number:
+          min: 1
+          max: 255
+          step: 1
+          mode: slider
+set_colors:
+  target:
+    entity:
+      integration: ddp
+      domain: light
+  fields:
+    colors:
+      required: true
+      example: '["warm_white", [255, 0, 0], "warm_white", [255, 0, 0]]'
+      selector:
+        object:
+    background:
+      example: "[0, 0, 0]"
+      selector:
+        color_rgb:

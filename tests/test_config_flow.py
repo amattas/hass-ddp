@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 from collections.abc import Callable, Iterator
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -20,9 +21,10 @@ from pytest_socket import socket_allow_hosts
 
 from custom_components.ddp.const import DOMAIN
 
-from .conftest import FakeController
+from .conftest import FIXTURES, FakeController
 
 HOST = "127.0.0.1"
+SCENES = "light.ndb_pro_minleon_ndb_pro_scenes"
 DISCOVER = "custom_components.ddp.config_flow.discover"
 OPEN = "custom_components.ddp.config_flow.DDPSender.open"
 
@@ -44,10 +46,14 @@ NDB_STATUS = {"status": {"man": "Minleon", "mod": "NDB-Pro", "ver": "1.2.3"}}
 def flow_controller(fake_controller: FakeController) -> Iterator[FakeController]:
     """The flow's detection and HTTP layout fetch talk to this loopback NDB-Pro, offline (so Generic) by default.
 
-    The flow also opens (and closes) a real UDP socket to the host; it never sends.
+    DDP discovery finds nothing unless a test patches it. The flow also opens (and closes) a real UDP socket to the
+    host; it never sends.
     """
     fake_controller.offline = True
-    with patch("custom_components.ddp.config_flow.DEFAULT_HTTP_PORT", fake_controller.port):
+    with (
+        patch("custom_components.ddp.config_flow.DEFAULT_HTTP_PORT", fake_controller.port),
+        patch(DISCOVER, AsyncMock(return_value=None)),
+    ):
         yield fake_controller
 
 
@@ -252,6 +258,7 @@ async def test_options_color_orders_follow_data_type(
 async def test_reconfigure_changes_controller_type_and_reloads(
     hass: HomeAssistant,
     entity_registry: er.EntityRegistry,
+    device_registry: dr.DeviceRegistry,
     flow_controller: FakeController,
     entry_factory: Callable[..., MockConfigEntry],
     current: str,
@@ -261,11 +268,20 @@ async def test_reconfigure_changes_controller_type_and_reloads(
     entry = entry_factory(controller=flow_controller, controller_type=current)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
-    assert (entity_registry.async_get("light.ndb_pro_scenes") is not None) == (current == "ndbpro")
+    assert (entity_registry.async_get(SCENES) is not None) == (current == "ndbpro")
+    controller_device = (DOMAIN, f"{HOST}:controller")
+    assert (device_registry.async_get_device_by_identifier(controller_device, entry.entry_id) is not None) == (
+        current == "ndbpro"
+    )
 
     result = await entry.start_reconfigure_flow(hass)
     assert result["step_id"] == "reconfigure"
-    assert result["description_placeholders"] == {"detected": "Minleon NDB-Pro"}
+    assert result["description_placeholders"] == {
+        "detected": "Minleon NDB-Pro",
+        "data_type": "rgb",
+        # Generic DDP has no HTTP layout and DDP discovery is silent, so only the NDB-Pro type reports one.
+        "layout": "rgb, 2 outputs, 122 pixels" if current == "ndbpro" else "none",
+    }
     assert _default_type(result) == current
 
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"controller_type": target})
@@ -276,7 +292,12 @@ async def test_reconfigure_changes_controller_type_and_reloads(
     assert entry.data["controller_type"] == target
     assert entry.state is ConfigEntryState.LOADED
     assert (entry.runtime_data.controller is not None) == (target == "ndbpro")
-    assert (entity_registry.async_get("light.ndb_pro_scenes") is not None) == (target == "ndbpro")
+    assert (entity_registry.async_get(SCENES) is not None) == (target == "ndbpro")
+    # Switching to Generic removes the controller device with its Scenes light; the DDP device stays.
+    assert (device_registry.async_get_device_by_identifier(controller_device, entry.entry_id) is not None) == (
+        target == "ndbpro"
+    )
+    assert device_registry.async_get_device_by_identifier((DOMAIN, HOST), entry.entry_id) is not None
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -307,8 +328,11 @@ async def test_reconfigure_changes_host_and_keeps_the_device(
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     registry = dr.async_get(hass)
-    device = registry.async_get_device_by_identifier((DOMAIN, HOST), entry.entry_id)
-    assert device is not None
+    devices = {
+        suffix: registry.async_get_device_by_identifier((DOMAIN, f"{HOST}{suffix}"), entry.entry_id)
+        for suffix in ("", ":controller")
+    }
+    assert None not in devices.values()
     if other_entry:
         MockConfigEntry(domain=DOMAIN, unique_id="127.0.0.2", data={"host": "127.0.0.2"}).add_to_hass(hass)
 
@@ -329,8 +353,97 @@ async def test_reconfigure_changes_host_and_keeps_the_device(
         assert entry.data["host"] == ("127.0.0.2" if moved else HOST)
         assert entry.unique_id == ("127.0.0.2" if moved else HOST)
         assert entry.title == ("127.0.0.2" if moved and title == HOST else title)  # follows only an untouched title
-        assert (registry.async_get_device_by_identifier((DOMAIN, "127.0.0.2"), entry.entry_id) is not None) == moved
-        if moved:
-            assert registry.async_get_device_by_identifier((DOMAIN, "127.0.0.2"), entry.entry_id).id == device.id  # type: ignore[union-attr]
-            assert registry.async_get_device_by_identifier((DOMAIN, HOST), entry.entry_id) is None
+        # Both devices (the DDP device and the controller device) follow the host, keeping their IDs.
+        for suffix, device in devices.items():
+            new = registry.async_get_device_by_identifier((DOMAIN, f"127.0.0.2{suffix}"), entry.entry_id)
+            old = registry.async_get_device_by_identifier((DOMAIN, f"{HOST}{suffix}"), entry.entry_id)
+            ids = (new.id if new else None, old.id if old else None)
+            assert ids == ((device.id, None) if moved else (None, device.id))  # type: ignore[union-attr]
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+def _serve_config(controller: FakeController, conv: int, ports: list[tuple[int, int]]) -> None:
+    """Make the fake NDB-Pro report input conversion ``conv`` and outputs of (length, start slot), the rest empty."""
+    config = json.loads((FIXTURES / "api_config.json").read_text())
+    config["config"]["conv"] = conv
+    for port, (length, slot) in zip(config["config"]["ports"], ports + [(0, 1)] * 8, strict=False):
+        port["l"], port["ss"] = length, slot
+    controller.pages["/api/config"] = json.dumps(config)
+
+
+@pytest.mark.parametrize(
+    ("conv", "ports", "data_type", "keys", "options", "kept_options"),
+    [
+        # Switched to a 4-channel input mode: output 2 moves to slot 321 (80 px x 4 channels), same two outputs.
+        (2, [(80, 1), (42, 321)], "rgbw", ["output1", "output2"], {"color_order": "GRB", "fps": 20}, {"fps": 20}),
+        (13, [(80, 1)], "rgb", ["output1"], {"color_order": "GRB"}, {"color_order": "GRB"}),  # output 2 dropped
+    ],
+    ids=["rgbw-drops-rgb-color-order", "output-dropped"],
+)
+async def test_reconfigure_rereads_the_layout(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    flow_controller: FakeController,
+    entry_factory: Callable[..., MockConfigEntry],
+    conv: int,
+    ports: list[tuple[int, int]],
+    data_type: str,
+    keys: list[str],
+    options: dict[str, Any],
+    kept_options: dict[str, Any],
+) -> None:
+    flow_controller.offline = False
+    entry = entry_factory(controller=flow_controller, options=options)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    before = {
+        key: entity_registry.async_get_entity_id("light", DOMAIN, f"{entry.entry_id}_{key}")
+        for key in ("output1", "output2", "strip", "controller")
+    }
+    assert None not in before.values()
+
+    _serve_config(flow_controller, conv, ports)
+    result = await entry.start_reconfigure_flow(hass)
+    assert result["description_placeholders"]["data_type"] == "rgb"  # type: ignore[index]
+    assert result["description_placeholders"]["layout"] == (  # type: ignore[index]
+        f"{data_type}, {len(keys)} output{'s' if len(keys) > 1 else ''}, {80 if len(keys) == 1 else 122} pixels"
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"controller_type": "ndbpro"})
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.data["data_type"] == data_type
+    assert [s["key"] for s in entry.data["segments"]] == keys
+    assert entry.data["pixel_count"] == (122 if len(keys) > 1 else 80)
+    assert (entry.data["manufacturer"], entry.data["model"], entry.data["firmware"]) == ("3WL", "NDBPRO", "2.0")
+    assert entry.options == kept_options
+    assert entry.runtime_data.sender.strip.channels == (4 if data_type == "rgbw" else 3)
+    # Unchanged outputs keep their entities (unique IDs are the layout's segment names); a dropped output and,
+    # with one output left, All outputs are removed. The Scenes light stays.
+    after = {key: entity_registry.async_get_entity_id("light", DOMAIN, f"{entry.entry_id}_{key}") for key in before}
+    expected = {key: before[key] if key in keys or key == "controller" or len(keys) > 1 else None for key in before}
+    assert after == expected
+    out1 = hass.states.get(before["output1"])  # type: ignore[arg-type]
+    assert out1 is not None
+    assert out1.attributes["supported_color_modes"] == [data_type]
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_reconfigure_without_a_layout_keeps_the_stored_one(
+    hass: HomeAssistant, flow_controller: FakeController, entry_factory: Callable[..., MockConfigEntry]
+) -> None:
+    entry = entry_factory(controller=flow_controller, data_type="rgbw", options={"color_order": "GRBW"})
+    stored = dict(entry.data)
+    result = await entry.start_reconfigure_flow(hass)  # the controller is offline: no layout over DDP or HTTP
+    assert result["description_placeholders"] == {"detected": "Generic DDP", "data_type": "rgbw", "layout": "none"}
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"controller_type": "ndbpro"})
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert dict(entry.data) == stored
+    assert entry.options == {"color_order": "GRBW"}
     assert await hass.config_entries.async_unload(entry.entry_id)

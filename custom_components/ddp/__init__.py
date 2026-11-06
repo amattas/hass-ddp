@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import probatio
 from aioddp import DDP_PORT, DataType, DDPSender, DDPSendError, EffectRunner, Segment, Strip
+from homeassistant.components.light.const import ATTR_BRIGHTNESS, ATTR_EFFECT
 from homeassistant.components.light.const import DOMAIN as LIGHT_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT, Platform
@@ -16,6 +18,10 @@ from homeassistant.helpers import service
 from homeassistant.helpers.typing import ConfigType
 
 from .const import (
+    ATTR_BACKGROUND,
+    ATTR_BLOCK_SIZE,
+    ATTR_COLORS,
+    ATTR_PARAMS,
     CONF_BRIGHTNESS_CAP,
     CONF_COLOR_ORDER,
     CONF_CONTROLLER_TYPE,
@@ -33,14 +39,17 @@ from .const import (
     DEFAULT_HTTP_PORT,
     DEFAULT_KEEPALIVE,
     DOMAIN,
+    MAX_PATTERN_COLORS,
     PRESET_COUNT,
     SEGMENT_KEY,
     SEGMENT_LENGTH,
     SEGMENT_NAME,
     SEGMENT_START,
     SERVICE_RECALL_PRESET,
+    SERVICE_SET_COLORS,
+    SERVICE_SET_PATTERN,
 )
-from .controller import Controller, create_controller, type_for_model
+from .controller import NAMED_COLORS, PALETTE_SLOTS, Controller, create_controller, type_for_model
 from .coordinator import DDPScenesCoordinator
 
 if TYPE_CHECKING:
@@ -49,13 +58,23 @@ if TYPE_CHECKING:
 PLATFORMS: list[Platform] = [Platform.LIGHT]
 CONFIG_VERSION = 2  # the config flow's VERSION
 
+_BYTE = probatio.All(probatio.Coerce(int), probatio.Range(min=0, max=255))
+_RGB = probatio.All(probatio.ExactSequence([_BYTE, _BYTE, _BYTE]), probatio.Coerce(tuple))
+# A pattern color: [r, g, b] or, for an RGBW entry and an effect that takes white, [r, g, b, w].
+_PATTERN_COLOR = probatio.Any(
+    probatio.ExactSequence([_BYTE, _BYTE, _BYTE]), probatio.ExactSequence([_BYTE, _BYTE, _BYTE, _BYTE])
+)
+# A palette color: [r, g, b] or the name of one of the controller's whites.
+_PALETTE_COLOR = probatio.Any(_RGB, probatio.All(probatio.In(NAMED_COLORS), NAMED_COLORS.__getitem__))
+
 
 @dataclass(frozen=True, slots=True)
 class SegmentConfig:
-    """One light's slice of the strip: ``key`` is stable (unique IDs), ``name`` is for display."""
+    """One light's slice of the strip: ``key`` is stable (unique IDs), ``name`` is for display (``None``: the
+    entity's translated name)."""
 
     key: str
-    name: str
+    name: str | None
     segment: Segment
 
 
@@ -63,8 +82,10 @@ class SegmentConfig:
 class DDPRuntime:
     """Per-entry runtime: the one open sender, the segments, and at most one effect runner per segment key.
 
-    ``controller`` drives a vendor controller's built-in effects (``None`` for Generic DDP) and ``scenes`` polls it,
-    and ``segment_lights`` lets the controller light hand the pixels back from DDP.
+    ``controller`` drives a vendor controller's built-in effects (``None`` for Generic DDP) and ``scenes`` polls it.
+    ``segment_lights`` is every DDP light (the per-output lights and, with several outputs, All outputs), so the
+    controller light can hand the pixels back from DDP. ``ownership`` serializes a DDP light taking pixels that
+    another DDP light shares.
     """
 
     sender: DDPSender
@@ -74,9 +95,10 @@ class DDPRuntime:
     scenes: DDPScenesCoordinator | None = None
     runners: dict[str, EffectRunner] = field(default_factory=dict)
     segment_lights: list[DDPSegmentLight] = field(default_factory=list)
+    ownership: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def release_if_idle(self) -> None:
-        """Stop keepalive resends once no segment light is on, so the controller's own effect comes back."""
+        """Stop keepalive resends once no DDP light is on, so the controller's own effect comes back."""
         if not any(light.is_on for light in self.segment_lights):
             self.sender.release()
 
@@ -123,7 +145,7 @@ def build_strip(entry: DDPConfigEntry) -> Strip:
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Register the integration's action once, so it exists whether or not an entry is loaded."""
+    """Register the integration's actions once, so they exist whether or not an entry is loaded."""
     service.async_register_platform_entity_service(
         hass,
         DOMAIN,
@@ -133,6 +155,33 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             probatio.Required("preset"): probatio.All(probatio.Coerce(int), probatio.Range(min=1, max=PRESET_COUNT))
         },
         func="async_recall_preset",
+    )
+    service.async_register_platform_entity_service(
+        hass,
+        DOMAIN,
+        SERVICE_SET_PATTERN,
+        entity_domain=LIGHT_DOMAIN,
+        schema={
+            probatio.Required(ATTR_COLORS): probatio.All(
+                [_PATTERN_COLOR], probatio.Length(min=1, max=MAX_PATTERN_COLORS)
+            ),
+            probatio.Optional(ATTR_BLOCK_SIZE): probatio.All(probatio.Coerce(int), probatio.Range(min=1)),
+            probatio.Optional(ATTR_EFFECT): str,
+            probatio.Optional(ATTR_PARAMS): dict,
+            probatio.Optional(ATTR_BRIGHTNESS): probatio.All(probatio.Coerce(int), probatio.Range(min=1, max=255)),
+        },
+        func="async_set_pattern",
+    )
+    service.async_register_platform_entity_service(
+        hass,
+        DOMAIN,
+        SERVICE_SET_COLORS,
+        entity_domain=LIGHT_DOMAIN,
+        schema={
+            probatio.Required(ATTR_COLORS): probatio.All([_PALETTE_COLOR], probatio.Length(max=PALETTE_SLOTS)),
+            probatio.Optional(ATTR_BACKGROUND): _RGB,
+        },
+        func="async_set_colors",
     )
     return True
 

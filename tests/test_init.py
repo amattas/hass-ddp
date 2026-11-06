@@ -92,7 +92,7 @@ async def test_unknown_controller_type_fails_setup_cleanly(hass: HomeAssistant, 
     assert await fetch_layout("from-the-future", "127.0.0.1") is None
 
 
-async def test_action_is_registered_by_async_setup_without_an_entry(hass: HomeAssistant) -> None:
-    """The action exists once the integration is set up, whether or not any entry is loaded."""
+async def test_actions_are_registered_by_async_setup_without_an_entry(hass: HomeAssistant) -> None:
+    """The actions exist once the integration is set up, whether or not any entry is loaded."""
     assert await async_setup_component(hass, DOMAIN, {})
-    assert hass.services.has_service(DOMAIN, "recall_preset")
+    assert all(hass.services.has_service(DOMAIN, name) for name in ("recall_preset", "set_pattern"))

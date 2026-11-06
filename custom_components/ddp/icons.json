@@ -3,12 +3,21 @@
     "light": {
       "scenes": {
         "default": "mdi:palette"
+      },
+      "all_outputs": {
+        "default": "mdi:led-strip-variant"
       }
     }
   },
   "services": {
     "recall_preset": {
       "service": "mdi:playlist-play"
+    },
+    "set_pattern": {
+      "service": "mdi:palette-swatch-variant"
+    },
+    "set_colors": {
+      "service": "mdi:format-color-fill"
     }
   }
 }

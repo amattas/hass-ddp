@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from custom_components.ddp import const
+from custom_components.ddp.light import PATTERN_EFFECTS
 
 PACKAGE = Path(__file__).parent.parent / "custom_components" / "ddp"
 
@@ -68,6 +69,10 @@ def test_icons_and_services_line_up() -> None:
         assert set(entities) <= set(strings["entity"][platform])
     for service, spec in services_yaml.items():
         assert set(spec["fields"]) == set(strings["services"][service]["fields"])
+    # The set_pattern effect picker offers exactly the aioddp effects that take colors.
+    assert set(services_yaml["set_pattern"]["fields"]["effect"]["selector"]["select"]["options"]) == set(
+        PATTERN_EFFECTS
+    )
 
 
 def test_quality_scale_is_well_formed() -> None:

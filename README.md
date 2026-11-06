@@ -1,8 +1,10 @@
 # DDP Pixel Controller for Home Assistant
 
 A Home Assistant custom integration that drives DDP (Distributed Display Protocol) pixel controllers, such as the
-Minleon NDB-Pro, as native light entities. Each controller is one device with one light per output. Every light
-supports on/off, brightness, RGB color, and an effect list, so Home Assistant scenes can capture and replay it.
+Minleon NDB-Pro, as native light entities. Each controller is one device with one light per output (a Minleon
+NDB-Pro adds a second device for its built-in effects and palette). Every light
+supports on/off, brightness, RGB color (RGBW on 4-channel pixels), and an effect list, so Home Assistant scenes can
+capture and replay it.
 
 All protocol code lives in [aioddp](https://github.com/amattas/aioddp), and Minleon NDB-Pro control in
 [pyminleon](https://github.com/amattas/pyminleon); this repository only maps them onto Home Assistant.
@@ -11,7 +13,7 @@ All protocol code lives in [aioddp](https://github.com/amattas/aioddp), and Minl
 
 | Device | Support |
 |---|---|
-| Minleon NDB-Pro with Rainmin RGB+ pixels | The reference device. DDP lights plus the Scenes light and `ddp.recall_preset` |
+| Minleon NDB-Pro with Rainmin RGB+ pixels | The reference device. DDP lights plus the Scenes light, `ddp.recall_preset`, and `ddp.set_colors` |
 | Any other DDP v1 controller (UDP port 4048) | **Generic DDP**: one light per output, or one light for the whole strip. Not tested beyond the DDP spec |
 
 RGB and RGBW pixels are supported. DDP is send-only, so Home Assistant cannot read a controller's state back over DDP;
@@ -22,11 +24,28 @@ for which controllers have been exercised.
 
 | Entity | What it does |
 |---|---|
-| **Output N** light (one per output; **All** for a manually described strip) | On/off, brightness, RGB color, and the aioddp effects. Sends DDP; its state is assumed |
-| **Scenes** light (vendor controller types only) | Selects the controller's built-in effects and shows, brightness maps to its intensity. Polled |
+| **Output N** light (one per output; **All** for a manually described strip) | On/off, brightness, RGB color (RGBW color for an RGBW entry), the aioddp effects, and multi-color patterns (`ddp.set_pattern`). Sends DDP; its state is assumed |
+| **All outputs** light (only when the controller has more than one output) | The same as an output light, over the whole strip: a pattern or effect runs on across the outputs in one DDP frame |
+| **Scenes** light (vendor controller types only, on the controller device) | Selects the controller's built-in effects and shows, brightness maps to its intensity. Its palette (the colors those effects use) is the `colors` and `background` attributes and is set with `ddp.set_colors`. Polled |
 
-Action: `ddp.recall_preset` (NDB-Pro Scenes light only). Home Assistant's `light.turn_on` and `light.turn_off` work on
-every light, and scenes capture the segment lights. The integration provides no triggers or conditions.
+**RGBW.** When the entry's pixel type is RGBW (the controller reports 4-channel input, or you chose RGBW when
+describing the strip), every DDP light uses Home Assistant's RGBW color mode: `rgbw_color` sets red, green, blue,
+and white, and white reaches the pixels' white LEDs. The default look is the white channel alone, `[0, 0, 0, 255]`.
+Solid colors and `palette` patterns carry white; the animated effects use red, green, and blue only (see Known
+limitations).
+
+Devices: the output lights and All outputs are on the DDP device, named after the entry. A vendor controller type adds
+a controller device named after the entry and the type (for example "Front Yard Minleon NDB-Pro"), connected through
+the DDP device, with the Scenes light on it.
+
+Actions: `ddp.set_pattern` (DDP lights: the outputs and All outputs), and `ddp.recall_preset` and `ddp.set_colors`
+(NDB-Pro Scenes light only). Home Assistant's `light.turn_on` and `light.turn_off` work on every light, and scenes capture the segment lights.
+The integration provides no triggers or conditions.
+
+**All outputs and the output lights share pixels**, so only one of them owns a pixel at a time. Turning All outputs on
+stops the output lights' effects and shows them off, without sending anything; turning an output light on does the same
+to All outputs. Nothing is blanked: the newly turned-on light simply draws over its own pixels, and an output that All
+outputs had lit keeps that frame until something else sends to it.
 
 ## Installation
 
@@ -70,16 +89,23 @@ and reloading or removing the integration never blanks the lights.
 | Type | Lights |
 |---|---|
 | Generic DDP | One DDP light per output. Works with any DDP controller; nothing else is created |
-| Minleon NDB-Pro | The DDP lights, plus the **Scenes** light and the `ddp.recall_preset` service (see below) |
+| Minleon NDB-Pro | The DDP lights, plus a controller device with the **Scenes** light and the `ddp.recall_preset` and `ddp.set_colors` actions (see below) |
 
 The stored type decides: nothing probes the controller at startup. Adding another vendor's controller means one entry
 in the controller type registry (`custom_components/ddp/controller.py`) backed by that vendor's library.
 
 ### Reconfigure
 
-**Reconfigure** on the integration entry changes the host (for example after a new DHCP lease) or the controller type;
-the entry reloads and keeps its device, entities, and history. Choosing Generic DDP removes the Scenes light. The
-pixel layout is not re-read: to change it, remove and re-add the entry.
+**Reconfigure** on the integration entry changes the host (for example after a new DHCP lease) or the controller type,
+and re-reads the output layout the same way adding does (a DDP query, then the controller type's own API). The form
+shows the stored pixel type and the layout the controller reports now. When it reports one, the entry stores its
+pixel type (RGB or RGBW), outputs, and pixel count; so after switching an NDB-Pro between a 3-channel and a 4-channel
+input mode, reconfigure the entry to follow it. Outputs that are still there keep their lights; an output that is gone
+loses its light (and with a single output left, All outputs goes too). A color order option that does not fit the new
+pixel type is reset to the default. When the controller reports no layout, the stored one is kept.
+
+The entry reloads and keeps its devices, entities, and history. Choosing Generic DDP removes the controller device and
+its Scenes light.
 
 ### Options
 
@@ -113,16 +139,28 @@ effect (about 20 s on an NDB-Pro). Turn the lights off first if you want them da
 ## Effects
 
 The effect list comes from aioddp: `breathe`, `chase`, `twinkle`, `rainbow`, `palette`. The effect `off` means a solid
-color. The light's RGB color drives each effect's main color where it has one (for example the chase color or the
-breathe color); brightness scales the whole effect.
+color. The light's RGB color drives each effect's main color where it has one (for example the chase color, the
+breathe color, or the one palette color); brightness scales the whole effect.
+
+**Patterns.** `ddp.set_pattern` gives a DDP light several colors at once: by default the `palette` effect repeats them
+in fixed blocks (`block_size` pixels each, so two colors with block size 1 alternate pixel by pixel). It can also hand
+the colors to `chase` (its lit groups cycle through them), or to `breathe` and `twinkle`, which use the first color.
+`params` sets the effect's other parameters, such as the chase `speed`; a bad value is refused with the parameter
+named. The light's effect shows the rendering effect, and the pattern is kept across restarts and a bare
+`light.turn_on`. A later `light.turn_on` with a color replaces the pattern with that one color; choosing another
+effect drops it.
+
+On an RGBW entry a pattern color may be `[r, g, b, w]` (an `[r, g, b]` color gets white 0), with `palette` only;
+the other effects render RGB and refuse a white value, as does an RGB entry.
 
 ## NDB-Pro built-in scenes
 
-A controller of type Minleon NDB-Pro (detected from its status model `NDBPRO`, or chosen by hand) gets one more light
-on the same device: **Scenes**. It drives the
-controller's own built-in effects over its HTTP UI instead of sending DDP. Entity IDs below assume the device is named
-"NDBPRO" (the title discovery gives it unless the controller reports a name), so the lights are
-`light.ndbpro_scenes`, `light.ndbpro_output_1`, and so on; check yours on the device page.
+A controller of type Minleon NDB-Pro (detected from its status model `NDBPRO`, or chosen by hand) gets a second
+device, "<entry> Minleon NDB-Pro", with one light: **Scenes**. It drives the controller's own built-in effects over its
+HTTP UI instead of sending DDP. Entity IDs below assume the entry is named "NDBPRO" (the title discovery gives it
+unless the controller reports a name), so the lights are `light.ndbpro_minleon_ndb_pro_scenes`,
+`light.ndbpro_output_1`, and so on; check yours on the device pages. (A Scenes light created before the controller
+device existed keeps its entity ID, for example `light.ndbpro_scenes`.)
 
 - Its effect list is the controller's: `Show1` and `Show2` play the shows stored on the controller; the rest (`Test`,
   `Bands`, `Glow`, ...) are its built-in patterns. Brightness maps to the controller's intensity (0-100%).
@@ -130,12 +168,17 @@ controller's own built-in effects over its HTTP UI instead of sending DDP. Entit
 - A bare `light.turn_on` brings back the last scene, also after a Home Assistant restart. Startup never commands the
   controller; the light polls the controller every 30 s and shows what it is actually running.
 - `ddp.recall_preset` plays one of the 20 stored presets (1-10 are slots of Show 1, 11-20 of Show 2).
+- `ddp.set_colors` sets the palette the built-in effects draw from: up to 5 custom colors and a background. The
+  `colors` and `background` attributes show the palette as the controller reports it (`[0, 0, 0]` is an empty slot).
+  `cool_white` and `warm_white` select the controller's white LEDs (it maps `#feffff` to cool white and pure white to
+  warm white); an empty list clears the palette, so the controller picks random colors. Setting colors does not turn
+  the Scenes light on or take the pixels from a DDP light, and it is not saved to the controller's flash.
 
 **Segment lights vs. scenes.** DDP data overrides the controller's built-in effect immediately, and about 20 s after DDP
 stops the controller falls back to it. So the two kinds of light take turns:
 
-- Turning on a scene (or recalling a preset) first turns every segment light off without sending black and stops DDP,
-  so the scene shows at once.
+- Turning on a scene (or recalling a preset) first turns every DDP light (the outputs and All outputs) off without
+  sending black and stops DDP, so the scene shows at once.
 - Turning a segment light on takes the pixels over again. While any segment light is on, the keepalive (default 1 s)
   keeps re-sending its frame so the controller does not fall back mid-color; with keepalive 0 a solid color reverts to
   the built-in effect after about 20 s.
@@ -155,7 +198,7 @@ automation:
     actions:
       - action: light.turn_on
         target:
-          entity_id: light.ndbpro_scenes
+          entity_id: light.ndbpro_minleon_ndb_pro_scenes
         data:
           effect: Show1
           brightness_pct: 80
@@ -170,7 +213,7 @@ automation:
     actions:
       - action: ddp.recall_preset
         target:
-          entity_id: light.ndbpro_scenes
+          entity_id: light.ndbpro_minleon_ndb_pro_scenes
         data:
           preset: 3
 
@@ -181,7 +224,7 @@ automation:
     actions:
       - action: light.turn_off
         target:
-          entity_id: light.ndbpro_scenes
+          entity_id: light.ndbpro_minleon_ndb_pro_scenes
 ```
 
 Turning the Scenes light off blanks the DDP segment lights too, so the 23:00 automation is all you need for "off".
@@ -208,6 +251,68 @@ scene:
 Activate it from an automation with `scene.turn_on`. After a Home Assistant restart, each segment light restores its
 last state and, if it was on, sends it again.
 
+## Examples: controller colors
+
+The controller's Fixed Colors effect in warm white and red, every other color (slots 1-4; slot 5 is emptied):
+
+```yaml
+- action: ddp.set_colors
+  target:
+    entity_id: light.ndbpro_minleon_ndb_pro_scenes
+  data:
+    colors: ["warm_white", [255, 0, 0], "warm_white", [255, 0, 0]]
+- action: light.turn_on
+  target:
+    entity_id: light.ndbpro_minleon_ndb_pro_scenes
+  data:
+    effect: Fixed Colors
+```
+
+Clear the palette so the controller picks random colors:
+
+```yaml
+action: ddp.set_colors
+target:
+  entity_id: light.ndbpro_minleon_ndb_pro_scenes
+data:
+  colors: []
+```
+
+## Examples: patterns
+
+Alternate red and green pixel by pixel across both outputs, as one continuous pattern:
+
+```yaml
+action: ddp.set_pattern
+target:
+  entity_id: light.ndbpro_all_outputs
+data:
+  colors: [[255, 0, 0], [0, 255, 0]]
+  block_size: 1
+  brightness: 200
+```
+
+Red, white, and blue blocks of five pixels on one output, then a moving version with chase:
+
+```yaml
+- action: ddp.set_pattern
+  target:
+    entity_id: light.ndbpro_output_1
+  data:
+    colors: [[255, 0, 0], [255, 255, 255], [0, 0, 255]]
+    block_size: 5
+- action: ddp.set_pattern
+  target:
+    entity_id: light.ndbpro_output_1
+  data:
+    colors: [[255, 0, 0], [255, 255, 255], [0, 0, 255]]
+    effect: chase
+    params:
+      speed: 4
+      spacing: 6
+      width: 3
+```
+
 ## Use cases
 
 - Run a roofline in a solid warm white most nights and a chase or rainbow effect for holidays, from dashboards or
@@ -220,16 +325,19 @@ last state and, if it was on, sends it again.
 
 | Action | Target | Fields |
 |---|---|---|
+| `ddp.set_pattern` | An output light or All outputs | `colors` (required: 1-16 colors, each `[r, g, b]` 0-255, or `[r, g, b, w]` on an RGBW entry with `palette`), `block_size` (pixels per color block, default 1; palette only), `effect` (`palette` by default, or `chase`, `breathe`, `twinkle`), `params` (the effect's other parameters, for example `{"speed": 4}`), `brightness` (1-255) |
 | `ddp.recall_preset` | A Scenes light | `preset` (1-20; 1-10 are slots of Show 1, 11-20 of Show 2) |
-| `light.turn_on` / `light.turn_off` | Any light of this integration | Segment lights: `brightness`, `rgb_color`, `effect`. Scenes light: `brightness`, `effect` |
+| `ddp.set_colors` | A Scenes light | `colors` (required: 0-5 colors for palette slots 1-5, each `[r, g, b]` 0-255 or `cool_white` / `warm_white`; the remaining slots are emptied, and an empty list lets the controller pick random colors), `background` (`[r, g, b]`; left as it is when omitted) |
+| `light.turn_on` / `light.turn_off` | Any light of this integration | Segment lights: `brightness`, `rgb_color` (`rgbw_color` on an RGBW entry), `effect`. Scenes light: `brightness`, `effect` |
 
-`ddp.recall_preset` on a segment light is refused. Recalling a preset overwrites the controller's current colors with
-the preset's. Actions raise an error when a send fails, the effect is unknown, or the controller does not answer.
+`ddp.set_pattern` on the Scenes light, and `ddp.recall_preset` or `ddp.set_colors` on a segment light, are refused. Recalling a preset overwrites the controller's current colors with
+the preset's. Actions raise an error when a send fails, the effect is unknown or takes no colors, a pattern parameter
+is invalid, a pattern color has a white value the entry or effect cannot show, or the controller does not answer.
 
 ## Diagnostics
 
 **Settings > Devices & services > DDP Pixel Controller > Download diagnostics** includes the entry, the DDP sender's
-counters, and, for an NDB-Pro, the controller's config and status documents. The host, IP addresses, MAC address, and
+counters, and, for an NDB-Pro, the Scenes light's state and palette and the controller's config and status documents. The host, IP addresses, MAC address, and
 Wi-Fi name are redacted.
 
 ## Known limitations
@@ -245,8 +353,13 @@ Wi-Fi name are redacted.
 - **Setup cannot verify the controller over DDP.** It only checks that a UDP socket opens; a wrong host looks fine
   until a frame is sent and nothing lights up.
 - **The Scenes light needs the controller's HTTP UI on port 80** and only exists for vendor controller types.
-- **The layout is read once, when the entry is added.** If you re-patch outputs on the controller, remove and re-add
-  the entry.
+- **The layout is read when the entry is added and on Reconfigure,** never at startup. If you re-patch outputs or
+  change the controller's input mode, reconfigure the entry.
+- **White needs a 4-channel input mode.** The NDB-Pro must be set to a 4-channel (RGBW) input mode in its own UI for
+  the entry to be RGBW; reconfigure the entry after changing it. In a 3-channel mode the controller derives white
+  itself and the lights stay RGB.
+- **Animated effects ignore white.** `breathe`, `chase`, `twinkle`, and `rainbow` render RGB: on an RGBW light they
+  use the color's red, green, and blue and leave the white LEDs off. Solid colors and `palette` carry white.
 - **No discovery.** DDP has no discovery protocol, so controllers are added by host.
 - **No brand images yet,** so the integration shows Home Assistant's placeholder icon.
 
@@ -259,7 +372,9 @@ Wi-Fi name are redacted.
 | A solid color turns into the controller's own effect after about 20 s | The keepalive is off or too long; set it to 1 s |
 | Scenes light is unavailable | The controller's web UI (TCP 80) is not answering. The DDP lights are unaffected; the Scenes light recovers on the next 30 s poll |
 | The controller has a new IP address | **Reconfigure** the entry and enter the new host (give the controller a DHCP reservation to avoid this) |
-| `ddp.recall_preset` is refused | The target is a segment light, or the entry is Generic DDP, which has no Scenes light |
+| `ddp.recall_preset` or `ddp.set_colors` is refused | The target is a segment light, or the entry is Generic DDP, which has no Scenes light. `ddp.set_colors` also refuses more than 5 colors, a component outside 0-255, or a name other than `cool_white` / `warm_white` |
+| `ddp.set_pattern` is refused | The target is the Scenes light, the effect takes no colors (`rainbow`), or a `params` value is out of range or not a parameter of that effect (the message names it) |
+| An output light turned off by itself | All outputs was turned on; it owns the pixels of every output until an output light is turned on again |
 
 To report a problem, include the downloaded diagnostics and debug logs:
 

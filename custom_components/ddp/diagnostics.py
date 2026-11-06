@@ -71,6 +71,8 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: DDPConf
             "effect": scene.effect if scene else None,
             "intensity": scene.intensity if scene else None,
             "effects": list(scene.effects) if scene else [],
+            "colors": [list(color) for color in scene.colors] if scene else [],
+            "background": list(scene.background) if scene and scene.background else None,
         }
         try:
             data["controller"] = redact_controller_document(
