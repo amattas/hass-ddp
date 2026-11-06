@@ -58,7 +58,7 @@ if TYPE_CHECKING:
 
 PLATFORMS: list[Platform] = [Platform.LIGHT]
 CONFIG_VERSION = 2  # the config flow's VERSION
-_RELEASED = "released"  # name of the pixel ranges ``release_unheld`` builds; aioddp segments need one
+_HELD = "held"  # name of the pixel ranges ``sync_holds`` builds; aioddp segments need one
 
 _BYTE = probatio.All(probatio.Coerce(int), probatio.Range(min=0, max=255))
 _RGB = probatio.All(probatio.ExactSequence([_BYTE, _BYTE, _BYTE]), probatio.Coerce(tuple))
@@ -87,7 +87,8 @@ class DDPRuntime:
     ``controller`` drives a vendor controller's built-in effects (``None`` for Generic DDP) and ``scenes`` polls it.
     ``segment_lights`` is every DDP light (the per-output lights and, with several outputs, All outputs), so the
     controller light can hand the pixels back from DDP. ``ownership`` serializes a DDP light taking pixels that
-    another DDP light shares. The sender keeps resending (keepalive) only the pixels a DDP light holds.
+    another DDP light shares. The sender keeps resending (keepalive) only the pixels a DDP light holds: ``held`` is
+    each light key whose segment the sender holds, and ``sync_holds`` makes it follow the lights' state.
     """
 
     sender: DDPSender
@@ -98,26 +99,39 @@ class DDPRuntime:
     runners: dict[str, EffectRunner] = field(default_factory=dict)
     segment_lights: list[DDPSegmentLight] = field(default_factory=list)
     ownership: asyncio.Lock = field(default_factory=asyncio.Lock)
+    held: dict[str, Segment] = field(default_factory=dict)
 
     @property
     def scene_running(self) -> bool:
         """A controller scene lights some of the DDP lights' pixels (shown, or blanked by HA's held black)."""
         return any(light.source in (LightSource.SCENE, LightSource.BLANKED) for light in self.segment_lights)
 
-    def release_unheld(self) -> None:
-        """Stop keepalive resends of every pixel no DDP light holds, so the controller's own effect takes them back
-        after its DDP timeout. Sends nothing."""
-        held = sorted((light.segment for light in self.segment_lights if light.holding), key=lambda s: s.start)
-        if not held:
+    async def sync_holds(self) -> None:
+        """Make the held pixels exactly those of the lights that hold (``holding``). Caller holds ``ownership``.
+
+        A held range no holding light covers is released (the controller's own effect takes it back after its DDP
+        timeout); an off or blanked light that should hold but does not gets black, sent only where nothing is held,
+        so a ``ddp`` light never gets black over it. A ``ddp`` light's own sends hold its range. Raises ``DDPError``.
+        """
+        holding = {light.key: light for light in self.segment_lights if light.holding}
+        if not holding:
             self.sender.release()
+            self.held.clear()
             return
-        end, pixel_count = 0, self.sender.strip.pixel_count
-        for segment in held:
-            if segment.start > end:
-                self.sender.release(Segment(_RELEASED, end, segment.start - end))
-            end = max(end, segment.end)
-        if end < pixel_count:
-            self.sender.release(Segment(_RELEASED, end, pixel_count - end))
+        keep = [light.segment for light in holding.values()]
+        held = list(self.held.values())  # releasing below never drops a pixel of ``keep``
+        for key in [key for key in self.held if key not in holding]:
+            for start, end in _uncovered(self.held.pop(key), keep):
+                self.sender.release(Segment(_HELD, start, end - start))
+        # The ``ddp`` lights first: their pixels are held by their own frames and must never get black.
+        for key, light in sorted(holding.items(), key=lambda item: item[1].source is not LightSource.DDP):
+            if key in self.held:
+                continue
+            if light.source is not LightSource.DDP:
+                for start, end in _uncovered(light.segment, held):
+                    await self.sender.off(Segment(_HELD, start, end - start))
+            self.held[key] = light.segment
+            held.append(light.segment)
 
     async def stop_runner(self, key: str) -> None:
         """Stop and forget the runner for ``key``, if any. Never blanks the segment."""
@@ -127,6 +141,20 @@ class DDPRuntime:
 
 
 type DDPConfigEntry = ConfigEntry[DDPRuntime]
+
+
+def _uncovered(segment: Segment, cover: list[Segment]) -> list[tuple[int, int]]:
+    """The ``(start, end)`` pixel runs of ``segment`` that no segment in ``cover`` covers."""
+    runs, position = [], segment.start
+    for other in sorted(cover, key=lambda s: s.start):
+        if other.start > position:
+            runs.append((position, min(other.start, segment.end)))
+        position = max(position, other.end)
+        if position >= segment.end:
+            break
+    if position < segment.end:
+        runs.append((position, segment.end))
+    return [(start, end) for start, end in runs if start < end]
 
 
 def make_strip(

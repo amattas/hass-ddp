@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import random
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import timedelta
 from typing import Any
@@ -41,7 +42,7 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from custom_components.ddp import DDPRuntime
-from custom_components.ddp.const import DOMAIN
+from custom_components.ddp.const import DOMAIN, LightSource
 from custom_components.ddp.controller import detect, fetch_layout
 from custom_components.ddp.coordinator import SCAN_INTERVAL
 
@@ -411,16 +412,22 @@ async def _keepalive_ranges(udp_listener: Listener) -> set[tuple[int, int]]:
     return {(p.offset, len(p.data)) for p in udp_listener.packets}
 
 
+@pytest.mark.parametrize("takers", [DDP_LIGHTS[::-1], [OUT1, OUT2]], ids=["all-outputs-first", "outputs-only"])
 async def test_an_output_turned_off_during_a_scene_holds_black_on_its_pixels_only(
-    hass: HomeAssistant, udp_listener: Listener, fake_controller: FakeController, fast_keepalive_entry: MockConfigEntry
+    hass: HomeAssistant,
+    udp_listener: Listener,
+    fake_controller: FakeController,
+    fast_keepalive_entry: MockConfigEntry,
+    takers: list[str],
 ) -> None:
     sender = fast_keepalive_entry.runtime_data.sender
     await _turn_on_scene(hass)
     assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_ON] * 3
     assert sender.stats.frames_sent == 0
 
-    # Both outputs taken over DDP (All outputs hands them its pixels): a poll of the same scene leaves them on DDP.
-    for entity_id in DDP_LIGHTS[::-1]:
+    # Both outputs taken over DDP (a light taking pixels shows the lights sharing them off, All outputs too while it
+    # showed the scene): a poll of the same scene leaves them on DDP.
+    for entity_id in takers:
         await _call(hass, SERVICE_TURN_ON, entity_id, rgb_color=(255, 0, 0))
     await _poll(fast_keepalive_entry)
     assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_ON, STATE_ON, STATE_OFF]
@@ -429,6 +436,13 @@ async def test_an_output_turned_off_during_a_scene_holds_black_on_its_pixels_onl
     # same scene shows it on every DDP light, sending nothing.
     await _call(hass, SERVICE_TURN_OFF, OUT1)
     await _call(hass, SERVICE_TURN_OFF, OUT2)
+    assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_OFF] * 3
+    assert await _keepalive_ranges(udp_listener) == set()
+    # Output 1 back on DDP before that poll: the off lights hold black again (Output 2's was released), until it is off.
+    await _call(hass, SERVICE_TURN_ON, OUT1, rgb_color=(255, 0, 0))
+    assert await _keepalive_ranges(udp_listener) == {(0, 122 * 3)}
+    assert udp_listener.packets[-1].data[OUT2_OFFSET:] == BLACK_OUT2
+    await _call(hass, SERVICE_TURN_OFF, OUT1)
     assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_OFF] * 3
     frames = sender.stats.frames_sent
     await _poll(fast_keepalive_entry)
@@ -450,31 +464,40 @@ async def test_an_output_turned_off_during_a_scene_holds_black_on_its_pixels_onl
     assert _state(hass, OUT2).state == STATE_ON
     assert await _keepalive_ranges(udp_listener) == set()
 
-    # A color takes Output 2 to DDP; Output 1 still shows the scene.
+    # A color takes Output 2 to DDP and shows All outputs, which shares its pixels, off; Output 1 still shows the scene.
     await _call(hass, SERVICE_TURN_ON, OUT2, rgb_color=(255, 0, 0))
     packet = await udp_listener.wait_for(lambda p: p.offset == OUT2_OFFSET)
     assert packet.data == process_frame(bytes((255, 0, 0)) * 42, sender.strip)
-    assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_ON] * 3
+    assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_ON, STATE_ON, STATE_OFF]
     assert _state(hass, OUT2).attributes[ATTR_RGB_COLOR] == (255, 0, 0)
 
     # The controller turned "Off" in its own UI: the scene's lights go off, the DDP-driven one keeps running.
     fake_controller.select("Off")
     await _poll(fast_keepalive_entry)
     assert [_state(hass, e).state for e in [*DDP_LIGHTS, SCENES]] == [STATE_OFF, STATE_ON, STATE_OFF, STATE_OFF]
-    assert await _keepalive_ranges(udp_listener) == {(OUT2_OFFSET, 42 * 3)}
+    # With no scene left, the off Output 1 holds black next to the DDP-driven one.
+    assert await _keepalive_ranges(udp_listener) == {(0, 122 * 3)}
+    assert udp_listener.packets[-1].data[:OUT2_OFFSET] == bytes(80 * 3)
 
 
-@pytest.mark.parametrize("unblank", [[ALL], [OUT1, OUT2]], ids=["all-outputs", "output-by-output"])
+@pytest.mark.parametrize(
+    ("off", "unblank"),
+    [(ALL, [ALL]), (ALL, [OUT1, OUT2]), (OUT2, [ALL])],
+    ids=["all-outputs", "output-by-output", "all-outputs-over-a-disabled-output"],
+)
 async def test_all_outputs_turned_off_during_a_scene_blanks_the_strip(
-    hass: HomeAssistant, udp_listener: Listener, fast_keepalive_entry: MockConfigEntry, unblank: list[str]
+    hass: HomeAssistant, udp_listener: Listener, fast_keepalive_entry: MockConfigEntry, off: str, unblank: list[str]
 ) -> None:
     sender = fast_keepalive_entry.runtime_data.sender
     await _turn_on_scene(hass)
 
-    await _call(hass, SERVICE_TURN_OFF, ALL)
-    packet = await udp_listener.wait_for(lambda p: p.offset == 0)
-    assert packet.data == bytes(122 * 3)
-    assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_OFF] * 3
+    await _call(hass, SERVICE_TURN_OFF, off)
+    if off == ALL:
+        packet = await udp_listener.wait_for(lambda p: p.offset == 0)
+        assert packet.data == bytes(122 * 3)
+        assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_OFF] * 3
+    else:  # All outputs still shows the scene on Output 1; a bare turn_on of it brings back every output
+        assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_ON, STATE_OFF, STATE_ON]
 
     if len(unblank) > 1:
         # One output back to the scene: only the other output's black is still held, and All outputs stays off.
@@ -486,6 +509,52 @@ async def test_all_outputs_turned_off_during_a_scene_blanks_the_strip(
     assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_ON] * 3
     assert sender.stats.frames_sent == 1  # only the black frame
     assert await _keepalive_ranges(udp_listener) == set()
+
+
+def _bytes_of(strip: Any, segments: list[Any]) -> set[int]:
+    return {b for s in segments for b in range(strip.byte_offset(s), strip.byte_offset(s) + strip.byte_length(s))}
+
+
+@pytest.mark.parametrize("seed", range(6))
+async def test_held_pixels_follow_the_light_states(
+    hass: HomeAssistant,
+    fake_controller: FakeController,
+    fast_keepalive_entry: MockConfigEntry,
+    seed: int,
+) -> None:
+    # Random commands and polls (fixed seeds): after each one the sender holds exactly the pixels of the lights that
+    # hold, and a light showing the scene has no pixel held but those a light sharing them drives or blanks.
+    runtime = fast_keepalive_entry.runtime_data
+    sender, strip = runtime.sender, runtime.sender.strip
+    rng = random.Random(seed)  # noqa: S311
+    ops: list[Callable[[str], Awaitable[None]]] = [
+        lambda e: _call(hass, SERVICE_TURN_ON, SCENES, effect=rng.choice(["Show1", "Test"])),
+        lambda e: _call(hass, SERVICE_TURN_OFF, SCENES),
+        lambda e: _poll_after(fake_controller, fast_keepalive_entry, rng.choice(["Show1", "Test", "Off"])),
+        lambda e: _poll(fast_keepalive_entry),
+        lambda e: _call(hass, SERVICE_TURN_ON, e, effect="chase"),
+        lambda e: _call(hass, SERVICE_TURN_ON, e, rgb_color=(255, 0, 0)),
+        lambda e: _call(hass, SERVICE_TURN_ON, e),
+        lambda e: _call(hass, SERVICE_TURN_OFF, e),
+        lambda e: _call(hass, SERVICE_TURN_OFF, e),
+    ]
+    for step in range(40):
+        await rng.choice(ops)(rng.choice(DDP_LIGHTS))
+        await asyncio.sleep(0.1)  # an effect's first frame
+        lights = runtime.segment_lights
+        report = (step, [(light.entity_id, light.source.value) for light in lights], sender._held)
+        held = {b for offset, length in sender._held for b in range(offset, offset + length)}
+        assert held == _bytes_of(strip, [light.segment for light in lights if light.holding]), report
+        for light in lights:
+            if light.source is LightSource.SCENE:
+                taken = [o.segment for o in lights if o.source in (LightSource.DDP, LightSource.BLANKED)]
+                assert held & _bytes_of(strip, [light.segment]) <= _bytes_of(strip, taken), (light.entity_id, report)
+
+
+async def _poll_after(fake_controller: FakeController, entry: MockConfigEntry, effect: str) -> None:
+    """The controller's own UI selects ``effect``; then the 30 s poll sees it."""
+    fake_controller.select(effect)
+    await _poll(entry)
 
 
 @pytest.mark.parametrize(

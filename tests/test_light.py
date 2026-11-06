@@ -166,6 +166,11 @@ async def test_turn_off_blanks_segment_and_releases_after_the_last(
     if both:
         await udp_listener.settle(2.2)
         assert udp_listener.packets == []
+        # A bare turn_on of Output 1 holds Output 2's black again, so keepalive resends the whole strip.
+        await _turn_on(hass, OUT1)
+        packet = await udp_listener.wait_for(lambda p: len(p.data) == 122 * 3, timeout=2.5)
+        color = process_frame(bytes((10, 20, 30)) * 80, setup_entry.runtime_data.sender.strip)
+        assert (packet.offset, packet.data) == (0, color + bytes(42 * 3))
     else:
         packet = await udp_listener.wait_for(lambda p: len(p.data) == 122 * 3, timeout=2.5)
         assert (packet.offset, packet.data) == keepalive
@@ -264,9 +269,10 @@ async def test_restored_off_light_turns_on_with_last_look(
     await hass.services.async_call(LIGHT_DOMAIN, SERVICE_TURN_ON, {ATTR_ENTITY_ID: [OUT1, OUT2]}, blocking=True)
 
     strip = entry.runtime_data.sender.strip
-    packet = await udp_listener.wait_for(lambda p: p.offset == 0)
+    # The light turned on second may get the black of an off light first.
+    packet = await udp_listener.wait_for(lambda p: p.offset == 0 and any(p.data))
     assert packet.data == process_frame(bytes((0, 255, 0)) * 80, strip, brightness=100 / 255)
-    packet = await udp_listener.wait_for(lambda p: p.offset == OUT2_OFFSET)
+    packet = await udp_listener.wait_for(lambda p: p.offset == OUT2_OFFSET and any(p.data))
     assert packet.data == process_frame(_blocks([RED, BLUE], 2, 42), strip, brightness=200 / 255)
     out2 = hass.states.get(OUT2)
     assert out2 is not None
@@ -287,6 +293,8 @@ async def test_unload_stops_runners_without_blanking(
     await _turn_on(hass, OUT1, effect="rainbow")
     await udp_listener.wait_for(lambda p: p.offset == 0)
     sender = setup_entry.runtime_data.sender
+    await udp_listener.settle()
+    udp_listener.packets.clear()  # the off Output 2 got its black
 
     assert await hass.config_entries.async_unload(setup_entry.entry_id)
     frames = sender.stats.frames_sent
@@ -528,7 +536,8 @@ async def test_turn_off_of_an_off_light_leaves_the_pixels_of_an_overlapping_ligh
 
     assert hass.states.get(on).state == STATE_ON  # type: ignore[union-attr]
     assert hass.states.get(off).state == STATE_OFF  # type: ignore[union-attr]
-    # An off light has nothing to blank: no black frame at all, so the red frame is the last at offset 0.
-    assert not any(p.data == bytes(len(p.data)) for p in udp_listener.packets)
+    # An off light has nothing to blank: no black frame over the lit pixels, so the red frame is the last at offset 0
+    # (an output the lit light does not cover is held black).
+    assert not any(p.offset == 0 and p.data == bytes(len(p.data)) for p in udp_listener.packets)
     red = process_frame(bytes(RED) * (122 if on == ALL else 80), setup_entry.runtime_data.sender.strip)
     assert [p.data for p in udp_listener.packets if p.offset == 0][-1] == red

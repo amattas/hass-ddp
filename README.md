@@ -187,13 +187,15 @@ pixels:
   nothing is sent and the keepalive stops for them, and the controller resumes the scene there after its DDP timeout,
   about 20 s later. A bare turn_on of All outputs brings back every output; brought back one at a time, All outputs
   shows on again once no output is disabled.
-- Turning a DDP light on with a brightness, color, effect, or pattern takes its pixels over DDP again; the other lights
-  keep showing the scene. While a light holds pixels, the keepalive (default 1 s) keeps re-sending them so the
+- Turning a DDP light on with a brightness, color, effect, or pattern takes its pixels over DDP again; a light that
+  shares those pixels (All outputs for an output, the outputs for All outputs) shows off, and the others keep showing
+  the scene. While a light holds pixels, the keepalive (default 1 s) keeps re-sending them so the
   controller does not fall back mid-color; with keepalive 0 a solid color reverts to the built-in effect after about
   20 s.
 - Turning the Scenes light off turns every DDP light off. When the poll sees the controller turned `Off` elsewhere,
   the lights that showed or disabled the scene go off; lights driven over DDP keep running.
-- With no scene running, when the last DDP light turns off, DDP stops; about 20 s later the controller's own effect
+- With no scene running, an off output stays black (held by the keepalive) while another DDP light is on; when the
+  last DDP light turns off, DDP stops; about 20 s later the controller's own effect
   (or `Off`) is back.
 - After a Home Assistant restart a disabled output is not restored (no black is sent, so the scene comes back on it),
   and a light that showed the scene is not re-sent; with a scene running, the idle DDP lights show it again.

@@ -11,9 +11,10 @@ Source: each DDP light is lit by nothing (``off``), by HA over DDP (``ddp``), by
 It shows on for ``ddp`` and ``scene``. A bare turn_on of a blanked light releases its pixels back to the scene; any
 turn_on with a brightness, color or effect takes it to ``ddp``.
 
-Ownership (``ddp`` only): lights whose pixels overlap (All outputs and each output) take the pixels from each other.
-Turning one on stops the overlapping ``ddp`` lights' runners and shows them off without sending anything; the pixels
-then show only the light that was turned on, where it covers them.
+Ownership: lights whose pixels overlap (All outputs and each output) take the pixels from each other. Turning one on
+over DDP stops the overlapping lights' runners and shows the ``ddp`` and ``scene`` ones off without sending anything;
+the pixels then show only the light that was turned on, where it covers them. Which pixels the sender keeps resending
+follows the lights' state (``DDPRuntime.sync_holds``, after every change).
 
 The Scenes light (on the controller device) selects the controller's built-in effects and stored presets; DDP data
 overrides those while it flows, so once the controller took the command it puts every DDP light in ``scene`` (sending
@@ -241,12 +242,16 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
         return self.source in (LightSource.DDP, LightSource.SCENE)
 
     @property
+    def key(self) -> str:
+        return self._config.key
+
+    @property
     def segment(self) -> Segment:
         return self._config.segment
 
     @property
     def holding(self) -> bool:
-        """Whether these pixels must stay held (``release_unheld`` keeps them): DDP drives them, black is held over a
+        """Whether these pixels must stay held (``sync_holds`` holds them): DDP drives them, black is held over a
         running scene, or, with no scene running, another light drives DDP (an off light then stays black)."""
         if self._source in (LightSource.DDP, LightSource.BLANKED):
             return True
@@ -467,6 +472,7 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
                     self._attr_brightness, self._color, self._attr_effect, self._pattern = previous
                     raise
                 self._source = LightSource.DDP
+            await self._sync_holds()
         self._write_states()
 
     async def _show_scene(self) -> None:
@@ -474,18 +480,24 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
 
         Sends nothing; the controller shows the scene there again after its DDP timeout (about 20 s on the NDB-Pro).
         """
-        runtime = self._runtime
-        async with runtime.ownership:
-            if self.source is LightSource.BLANKED:
-                async with self._lock:
+        async with self._runtime.ownership:
+            async with self._lock:
+                if self._source is LightSource.BLANKED:
                     self._source = LightSource.SCENE
-                for light in self._covered():
-                    await light.async_follow_scene(LightSource.SCENE, (LightSource.BLANKED,))
-                runtime.release_unheld()
+            for light in self._covered():
+                await light.async_follow_scene(LightSource.SCENE, (LightSource.BLANKED,))
+            await self._sync_holds()
         self._write_states()
 
+    async def _sync_holds(self) -> None:
+        """``DDPRuntime.sync_holds`` for a change this light made; a failed black frame is this light's error."""
+        try:
+            await self._runtime.sync_holds()
+        except DDPError as err:
+            raise self._send_error(err) from err
+
     async def _take_pixels(self) -> None:
-        """Hand back every other ``ddp`` light that shares pixels with this one (the ownership rule)."""
+        """Hand back every other ``ddp`` or ``scene`` light that shares pixels with this one (the ownership rule)."""
         for light in self._runtime.segment_lights:
             if light is not self and _overlaps(light._config.segment, self._config.segment):
                 await light.async_hand_back()
@@ -494,7 +506,7 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
         """Blank this light's pixels if it is on; an off light sends nothing (an overlapping light may own them).
 
         While a scene runs the black is held: the light (and every light it covers) is ``blanked``. Otherwise the
-        light is off and the pixels no DDP light holds any more are released.
+        light is off, and its black stays held only while another light drives DDP.
 
         Takes the locks in turn_on's order (ownership, then this light's own), so a concurrent turn_on of an
         overlapping light either finishes first (this light was handed back, so it is off) or runs after.
@@ -510,34 +522,37 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
                     await runtime.sender.off(self._config.segment)
                 except DDPError as err:
                     raise self._send_error(err) from err
+                runtime.held[self.key] = self.segment
                 self._source = LightSource.BLANKED if blank else LightSource.OFF
             if blank:
                 for light in self._covered():
                     await light.async_follow_scene(LightSource.BLANKED, ALL_SOURCES)
-            else:
-                runtime.release_unheld()
+            await self._sync_holds()
         self._write_states()
 
     async def async_controller_off(self) -> None:
         """The controller is going "Off": blank this light if DDP drives it, else just show it off.
 
-        Releases nothing; the Scenes light releases the pixels once every DDP light is off.
+        Releases nothing; the Scenes light syncs the held pixels once every DDP light is off.
         """
-        async with self._runtime.ownership, self._lock:
-            await self._runtime.stop_runner(self._config.key)
+        runtime = self._runtime
+        async with runtime.ownership, self._lock:
+            await runtime.stop_runner(self._config.key)
             if self._source is LightSource.DDP:
                 try:
-                    await self._runtime.sender.off(self._config.segment)
+                    await runtime.sender.off(self._config.segment)
                 except DDPError as err:
                     raise self._send_error(err) from err
+                runtime.held[self.key] = self.segment
             self._source = LightSource.OFF
         self.async_write_ha_state()
 
     async def async_hand_back(self) -> None:
-        """Stop this light's runner and, if DDP drove it, show it off, sending nothing: another light takes over."""
+        """Stop this light's runner and, if DDP drove it or it showed the scene, show it off, sending nothing: another
+        light takes over. A blanked light keeps its black."""
         async with self._lock:
             await self._runtime.stop_runner(self._config.key)
-            if self._source is not LightSource.DDP:
+            if self.source not in (LightSource.DDP, LightSource.SCENE):
                 return
             self._source = LightSource.OFF
         self.async_write_ha_state()
@@ -568,11 +583,12 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
             if info is None:
                 await runtime.stop_runner(key)
                 await runtime.sender.fill(segment, color, brightness=brightness)
-                return
-            effect_color = color if info.rgbw else (color[0], color[1], color[2])
-            await self._run_effect(info, _effect_params(info, [effect_color], self._pattern), brightness)
+            else:
+                effect_color = color if info.rgbw else (color[0], color[1], color[2])
+                await self._run_effect(info, _effect_params(info, [effect_color], self._pattern), brightness)
         except DDPError as err:
             raise self._send_error(err) from err
+        runtime.held[key] = segment  # the frames hold it
 
     async def _run_effect(self, info: EffectInfo, params: Mapping[str, Any], brightness: float) -> None:
         """Update this light's runner in place if it runs ``info``, else start one with ``params``."""
@@ -673,7 +689,8 @@ class ScenesLight(CoordinatorEntity[DDPScenesCoordinator], DDPEntity, LightEntit
         if state.effect is None:
             return
         before = previous.effect if previous is not None else None
-        lights = self._runtime.segment_lights
+        runtime = self._runtime
+        lights = runtime.segment_lights
         sources: tuple[LightSource, ...] = (LightSource.OFF, LightSource.DDP)
         target = LightSource.SCENE
         if state.effect == CONTROLLER_OFF:
@@ -681,9 +698,13 @@ class ScenesLight(CoordinatorEntity[DDPScenesCoordinator], DDPEntity, LightEntit
         elif before is None or before == state.effect:
             # Decided before any light changes: one light showing the scene would make the others stop holding.
             lights = [light for light in lights if light.source is LightSource.OFF and not light.holding]
-        changed = [await light.async_follow_scene(target, sources) for light in lights]
-        if any(changed):
-            self._runtime.release_unheld()
+        async with runtime.ownership:
+            for light in lights:
+                await light.async_follow_scene(target, sources)
+            try:
+                await runtime.sync_holds()
+            except DDPError as err:  # the poll itself succeeded; the next change syncs again
+                _LOGGER.warning("Could not send black to the off DDP lights of %s: %s", self.entity_id, err)
 
     @property
     def extra_restore_state_data(self) -> ExtraStoredData:
@@ -746,7 +767,11 @@ class ScenesLight(CoordinatorEntity[DDPScenesCoordinator], DDPEntity, LightEntit
                     await light.async_controller_off()
                 except HomeAssistantError as err:  # keep going: the controller's "Off" still darkens the rest
                     segment_error = segment_error or err
-            self._runtime.release_unheld()
+            try:
+                async with self._runtime.ownership:
+                    await self._sync_holds()
+            except HomeAssistantError as err:
+                segment_error = segment_error or err
             try:
                 await self.coordinator.controller.set_effect(CONTROLLER_OFF)
             except CONTROLLER_ERRORS as err:
@@ -786,7 +811,19 @@ class ScenesLight(CoordinatorEntity[DDPScenesCoordinator], DDPEntity, LightEntit
         for light in self._runtime.segment_lights:
             await light.async_follow_scene(LightSource.SCENE, ALL_SOURCES)
         # A segment turned on mid-way (an HA scene applies lights concurrently) keeps its pixels and keepalive.
-        self._runtime.release_unheld()
+        async with self._runtime.ownership:
+            await self._sync_holds()
+
+    async def _sync_holds(self) -> None:
+        """``DDPRuntime.sync_holds`` after a command; a failed black frame is this light's error."""
+        try:
+            await self._runtime.sync_holds()
+        except DDPError as err:
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="send_failed",
+                translation_placeholders={"entity": self.entity_id, "error": str(err)},
+            ) from err
 
     def _controller_error(self, err: Exception) -> HomeAssistantError:
         return HomeAssistantError(

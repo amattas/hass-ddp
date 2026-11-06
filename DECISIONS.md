@@ -60,15 +60,26 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
 - Not verified on hardware yet: whether the NDB-Pro keeps its effect running on outputs DDP is not writing to. If it
   does not, per-output disable freezes the other output; the README says so until the field test settles it.
 - Restart: `blanked` is not restored; after the first poll a running scene shows every idle DDP light as `scene`.
-- Implementation notes (2026-11-06): ownership hand-over applies to `ddp` lights only (a `scene` or `blanked` light
-  keeps its source when another light takes pixels over DDP). A poll runs the DDP-light changes under the
+- Implementation notes (2026-11-06): ownership hand-over applies to `ddp` and `scene` lights (both go `off`, sending
+  nothing; a `blanked` light keeps its black), so All outputs goes off when an output takes its pixels over a running
+  scene, and the outputs go off when All outputs does. A poll runs the DDP-light changes under the
   coordinator's lock before it publishes (`DDPScenesCoordinator.on_poll`, set by the Scenes light), so commands never
   trigger them; "scene start" (a change to a different non-Off effect) takes `off` and `ddp` lights. Every other poll
   of a running scene moves the `off` lights that hold no range to `scene` (released, so the controller lights them
   again ~20 s later) and never touches `ddp` lights, since DDP may be overriding that effect. Setup moves only idle
   lights (off, no overlapping `ddp` light). Restore stores the source: a light that was on showing a scene is not re-sent. All outputs is
   blanked only while an output it covers is; its outputs hold their own black, so un-blanking one releases just that
-  output. With no scene running an off light still keeps its black held while another light is `ddp`.
+  output, and a bare turn_on of All outputs un-blanks every output it covers.
+- Held pixels (2026-11-06, after a verifier found them drifting): which ranges keepalive resends is a pure function of
+  the lights' state, not of events. `DDPRuntime.sync_holds()` runs under the ownership lock at the end of every change
+  (turn_on, turn_off, un-blank, a poll's changes, the Scenes light's commands): the wanted set is the segments of the
+  lights whose `holding` is true (`ddp`, `blanked`, or `off` while no scene runs and another light is `ddp`);
+  `runtime.held` records which light keys the sender holds. A held range nothing wants is released; an `off` or
+  `blanked` light that should hold but does not gets black, sent only where nothing is held, so a `ddp` light never
+  gets black over it. Consequence: with no scene running, turning one output on over DDP sends black once to the other
+  off outputs and holds it (before, an output that had never been sent stayed unheld), and a poll that sees the
+  controller go `Off` holds black for the outputs that showed the scene while another light is `ddp`. Setup and
+  unload still send nothing (restore re-sends a `ddp` light but does not sync).
 
 ## 2026-11-06: controller device entities
 
