@@ -391,13 +391,19 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
                 await light.async_hand_back()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
-        async with self._lock:
+        """Blank this light's pixels if it is on; an off light sends nothing (an overlapping light may own them).
+
+        Takes the locks in turn_on's order (ownership, then this light's own), so a concurrent turn_on of an
+        overlapping light either finishes first (this light was handed back, so it is off) or runs after.
+        """
+        async with self._runtime.ownership, self._lock:
             await self._runtime.stop_runner(self._config.key)
-            try:
-                await self._runtime.sender.off(self._config.segment)
-            except DDPError as err:
-                raise self._send_error(err) from err
-            self._attr_is_on = False
+            if self._attr_is_on:
+                try:
+                    await self._runtime.sender.off(self._config.segment)
+                except DDPError as err:
+                    raise self._send_error(err) from err
+                self._attr_is_on = False
             self._runtime.release_if_idle()
         self.async_write_ha_state()
 

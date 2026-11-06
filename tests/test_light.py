@@ -501,3 +501,34 @@ async def test_all_outputs_and_the_outputs_take_the_pixels_from_each_other(
     udp_listener.packets.clear()
     await udp_listener.settle()
     assert udp_listener.packets == []
+
+
+@pytest.mark.parametrize(
+    ("on", "off", "pixels"),
+    [(OUT1, ALL, 122), (ALL, OUT1, 80)],
+    ids=["all-outputs-off-while-an-output-is-on", "an-output-off-while-all-outputs-is-on"],
+)
+@pytest.mark.parametrize("concurrent", [False, True], ids=["sequential", "scene-gather"])
+async def test_turn_off_of_an_off_light_leaves_the_pixels_of_an_overlapping_light(
+    hass: HomeAssistant,
+    udp_listener: Listener,
+    setup_entry: MockConfigEntry,
+    on: str,
+    off: str,
+    pixels: int,
+    concurrent: bool,
+) -> None:
+    if concurrent:
+        await asyncio.gather(_turn_on(hass, on, rgb_color=RED), _turn_off(hass, off))
+    else:
+        await _turn_on(hass, on, rgb_color=RED)
+        await udp_listener.settle()
+        await _turn_off(hass, off)
+    await udp_listener.settle()
+
+    assert hass.states.get(on).state == STATE_ON  # type: ignore[union-attr]
+    assert hass.states.get(off).state == STATE_OFF  # type: ignore[union-attr]
+    # An off light has nothing to blank: no black frame at all, so the red frame is the last at offset 0.
+    assert not any(p.data == bytes(len(p.data)) for p in udp_listener.packets)
+    red = process_frame(bytes(RED) * (122 if on == ALL else 80), setup_entry.runtime_data.sender.strip)
+    assert [p.data for p in udp_listener.packets if p.offset == 0][-1] == red

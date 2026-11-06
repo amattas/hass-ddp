@@ -3,7 +3,7 @@ rules:
   # Bronze
   action-setup:
     status: done
-    comment: ddp.recall_preset and ddp.set_pattern are registered in async_setup as platform entity services (light domain).
+    comment: ddp.recall_preset, ddp.set_pattern and ddp.set_colors are registered in async_setup as platform entity services (light domain).
   appropriate-polling:
     status: done
     comment: |
@@ -31,7 +31,7 @@ rules:
       CI, with tagged releases) is out of scope here; aioddp is not yet published to PyPI.
   docs-actions:
     status: done
-    comment: README documents ddp.set_pattern, ddp.recall_preset, and the light actions it supports (Actions).
+    comment: README documents ddp.set_pattern, ddp.set_colors, ddp.recall_preset, and the light actions it supports (Actions).
   docs-conditions:
     status: exempt
     comment: The integration provides no conditions.
@@ -85,7 +85,7 @@ rules:
     status: done
     comment: |
       Failed sends and controller errors raise HomeAssistantError; unknown effects, invalid set_pattern effects or
-      params, recall_preset on a non-Scenes light, and set_pattern on the Scenes light raise ServiceValidationError.
+      params, recall_preset or set_colors on a non-Scenes light, and set_pattern on the Scenes light raise ServiceValidationError.
   config-entry-unloading:
     status: done
     comment: Unload removes the lights (which stop their effect runners) and closes the socket without blanking.
