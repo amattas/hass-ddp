@@ -16,10 +16,10 @@ dependencies = []
 [project.optional-dependencies]
 dev = [
     # Keep the aioddp and pyminleon commits identical to manifest.json.
-    "aioddp @ git+https://github.com/amattas/aioddp.git@e7f406ab2239c38fea26bbd3f5baa670342d040f",
+    "aioddp @ git+https://github.com/amattas/aioddp.git@8d94b0dd055fb4057ebb04c21c943469e6e2d6db",
     "homeassistant==2026.10.4",
     "mypy==2.4.1",
-    "pyminleon @ git+https://github.com/amattas/pyminleon.git@e7e5eeb97b42da67d6525b4e73eacd8b7ac21ad7",
+    "pyminleon @ git+https://github.com/amattas/pyminleon.git@eb56e3ad1d19323242e03bf4fbb84dab288a7004",
     "pytest-cov==7.1.0",
     "pytest-homeassistant-custom-component==0.13.375",
     "ruff==0.17.2",
