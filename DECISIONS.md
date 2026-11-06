@@ -109,7 +109,23 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
   `ControllerCommands.follow_poll`, which setup registers as the coordinator's `on_poll` (cleared on unload), so
   disabling the controller light no longer stops polls from moving the DDP lights. A slot command publishes the new palette (no read-back), except before the first
   read, when the other slots are unknown and the palette is read back. A Color light's bare turn_on sends the slot's
-  last non-empty color (restore extra data `last_color`; a named white is remembered as its exact value), white
-  `(255, 255, 255)` (Warm White) by default; a brightness scales the color sent, a named white is always sent exact.
+  last non-black color sent or read (restore extra data `last_color`; a white is remembered too, so clearing a white
+  and turning on again brings it back), red `(255, 0, 0)` by default; a brightness scales the color sent, a named white is always sent exact.
   Warm White reads back as `#c69740` = `(198, 151, 64)`. Switch and select are removed on a switch to Generic with the
   controller device (the device registry removes its entities); the light platform drops stale controller lights.
+
+## 2026-11-06: the Power switch is the controller device's main entity
+
+- Field test of 0.3.1: the controller device should read Power (top, the device's name), then Color 1..5, then
+  Scene. The controller light is dropped: the `switch` "Power" is the main entity (no entity name), the five Color
+  lights and the Scene `select` follow (HA sorts the rest by name), and the controller's intensity becomes a `number`
+  "Intensity" (percent, entity category config) so it sits in Configuration, not Controls.
+- `ddp.recall_preset` and `ddp.set_colors` target the Power switch now (switch domain); the palette and background
+  attributes move to it. The Scene select keeps leaving the controller's "Off" out so Power on restores the last scene.
+- The old controller light entity (`<entry>_controller`) is removed at setup like other stale entities; automations
+  that targeted it must move to the Power switch or the Scene select.
+- Palette slots get a `select` "Mode N" (Color / Warm White / Cool White) next to "Color N". Mode is read from the
+  slot: #c69740 or #ffffff = Warm White, #feffff = Cool White, anything else (black included) = Color. Choosing a
+  white sends it at once; choosing Color clears the slot (black: the light shows off, pick a color to set it). While
+  the mode is a white, Color N is an on/off light (no color picker; off clears the slot, on re-sends the white);
+  while Color, it is an RGB light. The Warm/Cool White effects on Color N are gone; `ddp.set_colors` keeps the names.

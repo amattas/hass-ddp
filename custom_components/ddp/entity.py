@@ -23,7 +23,6 @@ from .const import (
     CONTROLLER_OFF,
     DOMAIN,
     PATTERN_EFFECT,
-    RGB,
 )
 from .controller import CONTROLLER_TYPES, TYPE_GENERIC
 from .coordinator import DDPScenesCoordinator, SceneState
@@ -73,22 +72,6 @@ class DDPEntity(Entity):
                 sw_version=entry.data.get(CONF_FIRMWARE),
                 via_device_id=ddp_device_id,
             )
-
-    async def async_recall_preset(self, preset: int) -> None:
-        """The ``recall_preset`` action: only the controller light of a vendor controller type can."""
-        raise ServiceValidationError(
-            translation_domain=DOMAIN,
-            translation_key="not_a_controller",
-            translation_placeholders={"entity": self.entity_id},
-        )
-
-    async def async_set_colors(self, colors: Sequence[RGB], background: RGB | None = None) -> None:
-        """The ``set_colors`` action: only the controller light of a vendor controller type can."""
-        raise ServiceValidationError(
-            translation_domain=DOMAIN,
-            translation_key="palette_not_a_controller",
-            translation_placeholders={"entity": self.entity_id},
-        )
 
     async def async_set_pattern(
         self,

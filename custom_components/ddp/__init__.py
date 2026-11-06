@@ -11,6 +11,7 @@ import probatio
 from aioddp import DDP_PORT, DataType, DDPSender, DDPSendError, EffectRunner, Segment, Strip
 from homeassistant.components.light.const import ATTR_BRIGHTNESS, ATTR_EFFECT
 from homeassistant.components.light.const import DOMAIN as LIGHT_DOMAIN
+from homeassistant.components.switch.const import DOMAIN as SWITCH_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT, Platform
 from homeassistant.core import HomeAssistant
@@ -58,7 +59,7 @@ from .coordinator import DDPScenesCoordinator
 if TYPE_CHECKING:
     from .light import DDPSegmentLight
 
-PLATFORMS: list[Platform] = [Platform.LIGHT, Platform.SELECT, Platform.SWITCH]
+PLATFORMS: list[Platform] = [Platform.LIGHT, Platform.NUMBER, Platform.SELECT, Platform.SWITCH]
 CONFIG_VERSION = 2  # the config flow's VERSION
 _HELD = "held"  # name of the pixel ranges ``sync_holds`` builds; aioddp segments need one
 
@@ -88,8 +89,8 @@ class DDPRuntime:
 
     ``controller`` drives a vendor controller's built-in effects (``None`` for Generic DDP), ``scenes`` polls it and
     ``commands`` (the controller device's entities share them) command it.
-    ``segment_lights`` is every DDP light (the per-output lights and, with several outputs, All outputs), so the
-    controller light can hand the pixels back from DDP. ``ownership`` serializes a DDP light taking pixels that
+    ``segment_lights`` is every DDP light (the per-output lights and, with several outputs, All outputs), so a
+    controller command can hand the pixels back from DDP. ``ownership`` serializes a DDP light taking pixels that
     another DDP light shares. The sender keeps resending (keepalive) only the pixels it holds (``DDPSender.held``), and
     ``sync_holds`` makes them follow the lights' state.
     """
@@ -193,12 +194,13 @@ def build_strip(entry: DDPConfigEntry) -> Strip:
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Register the integration's actions once, so they exist whether or not an entry is loaded."""
+    """Register the integration's actions once, so they exist whether or not an entry is loaded. The controller's
+    actions take the Power switch (the only switch), ``set_pattern`` the DDP lights."""
     service.async_register_platform_entity_service(
         hass,
         DOMAIN,
         SERVICE_RECALL_PRESET,
-        entity_domain=LIGHT_DOMAIN,
+        entity_domain=SWITCH_DOMAIN,
         schema={
             probatio.Required("preset"): probatio.All(probatio.Coerce(int), probatio.Range(min=1, max=PRESET_COUNT))
         },
@@ -224,7 +226,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         hass,
         DOMAIN,
         SERVICE_SET_COLORS,
-        entity_domain=LIGHT_DOMAIN,
+        entity_domain=SWITCH_DOMAIN,
         schema={
             probatio.Required(ATTR_COLORS): probatio.All([_PALETTE_COLOR], probatio.Length(max=PALETTE_SLOTS)),
             probatio.Optional(ATTR_BACKGROUND): _RGB,
@@ -279,7 +281,7 @@ def _stop_following(scenes: DDPScenesCoordinator) -> Callable[[], None]:
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
-    """1 -> 2: entries gain a controller type; a discovered NDB-Pro keeps its controller light, the rest are Generic."""
+    """1 -> 2: entries gain a controller type; a discovered NDB-Pro gets the NDB-Pro type, the rest are Generic."""
     if entry.version == 1:  # a newer version is refused by Home Assistant before this runs
         hass.config_entries.async_update_entry(
             entry, data={**entry.data, CONF_CONTROLLER_TYPE: type_for_model(entry.data.get(CONF_MODEL))}, version=2

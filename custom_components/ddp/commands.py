@@ -1,9 +1,11 @@
-"""Commands to a vendor controller, shared by the controller device's entities (light, Power, Scene, Color 1-5).
+"""Commands to a vendor controller, shared by the controller device's entities (Power, Scene, Color/Mode 1-5,
+Intensity).
 
 Every command runs under the coordinator's lock (so a stale poll cannot undo it) and publishes what it changed. A
 command that starts a scene hands the pixels back from DDP once the controller took it: every DDP light shows the
 scene, sending nothing, and the held pixels follow (``DDPRuntime.sync_holds``). Turning the controller off blanks
-the DDP-driven segments first. The palette is the controller's own setting, so palette commands leave DDP alone.
+the DDP-driven segments first. The palette and intensity are the controller's own settings, so their commands leave
+DDP alone.
 ``follow_poll`` is the coordinator's ``on_poll``: a scene started or stopped outside HA reaches the DDP lights.
 """
 
@@ -17,8 +19,8 @@ from typing import TYPE_CHECKING, Any
 from aioddp import DDPError
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
-from .const import CONTROLLER_OFF, DOMAIN, RGB, LightSource
-from .controller import CONTROLLER_ERRORS, EMPTY_COLOR, PALETTE_SLOTS
+from .const import COLOR_COOL_WHITE, COLOR_WARM_WHITE, CONTROLLER_OFF, DOMAIN, RGB, LightSource
+from .controller import CONTROLLER_ERRORS, EMPTY_COLOR, NAMED_COLORS, PALETTE_SLOTS, WARM_WHITE_SHOWN
 from .coordinator import DDPScenesCoordinator, SceneState
 
 if TYPE_CHECKING:
@@ -27,15 +29,23 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 ALL_SOURCES = tuple(LightSource)
 
+# A palette slot's mode ("Mode N"): a custom color, or one of the controller's whites, sent as its exact value.
+MODE_COLOR = "color"
+MODE_WHITES: dict[str, RGB] = {
+    COLOR_WARM_WHITE: NAMED_COLORS[COLOR_WARM_WHITE],
+    COLOR_COOL_WHITE: NAMED_COLORS[COLOR_COOL_WHITE],
+}
+SLOT_MODES = [MODE_COLOR, *MODE_WHITES]
+# What a slot reads back as for each white (Warm White shows as #c69740 once the controller set it).
+_WHITE_READBACK: dict[RGB, str] = {
+    **{color: mode for mode, color in MODE_WHITES.items()},
+    WARM_WHITE_SHOWN: COLOR_WARM_WHITE,
+}
 
-def to_brightness(intensity: int) -> int:
-    """A controller intensity (percent) as an HA brightness."""
-    return round(intensity * 255 / 100)
 
-
-def to_intensity(brightness: int) -> int:
-    """An HA brightness as a controller intensity (percent, at least 1)."""
-    return max(1, round(brightness * 100 / 255))
+def slot_mode(color: RGB) -> str:
+    """The mode of a slot holding ``color``: a white, else ``MODE_COLOR`` (an empty slot included)."""
+    return _WHITE_READBACK.get(color, MODE_COLOR)
 
 
 class ControllerCommands:
@@ -51,13 +61,8 @@ class ControllerCommands:
         data = self.coordinator.data
         return [effect for effect in data.effects if effect != CONTROLLER_OFF] if data is not None else []
 
-    async def turn_on(
-        self,
-        entity_id: str | None,
-        effect: str | None = None,
-        brightness: int | None = None,
-    ) -> None:
-        """Run ``effect`` (default: the last scene, else the first) at ``brightness``, then hand the pixels back."""
+    async def turn_on(self, entity_id: str | None, effect: str | None = None) -> None:
+        """Run ``effect`` (default: the last scene, else the first), then hand the pixels back."""
         effects = self.effects
         effect = effect or self.coordinator.last_effect or (effects[0] if effects else None)
         if effect not in effects:
@@ -69,19 +74,13 @@ class ControllerCommands:
                     "effects": ", ".join(effects),
                 },
             )
-        controller = self.coordinator.controller
         async with self.coordinator.lock:
             try:
-                if brightness is not None:
-                    await controller.set_intensity(to_intensity(brightness))
-                await controller.set_effect(effect)
+                await self.coordinator.controller.set_effect(effect)
             except CONTROLLER_ERRORS as err:
                 raise controller_error(entity_id, err) from err
             await self._hand_back(entity_id)  # only once the controller took the command: a failure keeps the DDP look
-            if brightness is None:
-                self._publish(effect=effect)
-            else:
-                self._publish(effect=effect, intensity=to_intensity(brightness))
+            self._publish(effect=effect)
 
     async def turn_off(self, entity_id: str | None) -> None:
         """Fully dark: blank every DDP segment HA drives, show every DDP light off, then select the controller's
@@ -107,6 +106,15 @@ class ControllerCommands:
             self._publish(effect=CONTROLLER_OFF)
         if segment_error is not None:
             raise segment_error
+
+    async def set_intensity(self, entity_id: str | None, percent: int) -> None:
+        """Set the controller's intensity (1-100 %) for its scenes; it starts no scene."""
+        async with self.coordinator.lock:
+            try:
+                await self.coordinator.controller.set_intensity(percent)
+            except CONTROLLER_ERRORS as err:
+                raise controller_error(entity_id, err) from err
+            self._publish(intensity=percent)
 
     async def recall_preset(self, entity_id: str | None, preset: int) -> None:
         """Recall stored show ``preset`` (1-20), hand the pixels back, then read back what the controller runs."""

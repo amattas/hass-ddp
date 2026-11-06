@@ -54,7 +54,7 @@ def test_every_used_key_is_translated() -> None:
     strings, used = _load("strings.json"), _used_keys()
     platforms = {key.removeprefix("entity."): keys for key, keys in used.items() if key.startswith("entity.")}
     assert used["exception"] and used["selector"]  # the scan found something to check
-    assert set(platforms) == {"light", "select", "switch"}
+    assert set(platforms) == {"light", "number", "select", "switch"}
     assert used["exception"] <= set(strings["exceptions"])
     assert used["selector"] <= set(strings["selector"])
     for platform, keys in platforms.items():

@@ -3,7 +3,7 @@ rules:
   # Bronze
   action-setup:
     status: done
-    comment: ddp.recall_preset, ddp.set_pattern and ddp.set_colors are registered in async_setup as platform entity services (light domain).
+    comment: ddp.recall_preset, ddp.set_pattern and ddp.set_colors are registered in async_setup as platform entity services (set_pattern on the light domain, recall_preset and set_colors on the switch domain, i.e. the Power switch).
   appropriate-polling:
     status: done
     comment: |
@@ -33,7 +33,7 @@ rules:
       CI, with tagged releases) is out of scope here; aioddp is not yet published to PyPI.
   docs-actions:
     status: done
-    comment: README documents ddp.set_pattern, ddp.set_colors, ddp.recall_preset, and the light actions it supports (Actions).
+    comment: README documents ddp.set_pattern, ddp.set_colors, ddp.recall_preset, and the light, switch, select, and number actions it supports (Actions).
   docs-conditions:
     status: exempt
     comment: The integration provides no conditions.
@@ -58,13 +58,13 @@ rules:
     status: done
     comment: |
       Unique IDs are <config entry id>_<segment key>, <config entry id>_strip for All outputs, and on the controller
-      device <config entry id>_controller (its light; unchanged from the Scenes light it was), _power, _scene, and
-      _color_1 to _color_5.
+      device <config entry id>_power, _color_1 to _color_5, _mode_1 to _mode_5, _scene, and _intensity. The controller light
+      (<config entry id>_controller) is gone; setup removes its registry entry like any stale light.
   has-entity-name:
     status: done
     comment: |
-      DDPEntity sets _attr_has_entity_name; segment lights are named after their output, the controller light is the
-      controller device's main entity (name None), and All outputs, Power, Scene, and Color 1-5 are named by
+      DDPEntity sets _attr_has_entity_name; segment lights are named after their output, the Power switch is the
+      controller device's main entity (name None), and All outputs, Color 1-5, Mode 1-5, Scene, and Intensity are named by
       translation.
   runtime-data:
     status: done
@@ -89,8 +89,9 @@ rules:
     status: done
     comment: |
       Failed sends and controller errors raise HomeAssistantError; unknown effects, invalid set_pattern effects or
-      params, an unknown palette white, recall_preset or set_colors on any light but the controller light, and
-      set_pattern on a controller device light raise ServiceValidationError.
+      params, a remembered scene the controller no longer lists, and set_pattern on a
+      Color light raise ServiceValidationError. recall_preset and set_colors are switch-domain services, so Home
+      Assistant only calls them on the Power switch.
   config-entry-unloading:
     status: done
     comment: Unload removes the lights (which stop their effect runners) and closes the socket without blanking.
@@ -115,7 +116,7 @@ rules:
   parallel-updates:
     status: done
     comment: |
-      light.py, switch.py and select.py set PARALLEL_UPDATES = 0: segment sends are independent local UDP writes, and
+      light.py, number.py, select.py and switch.py set PARALLEL_UPDATES = 0: segment sends are independent local UDP writes, and
       controller commands and polls serialize on the coordinator's lock.
   reauthentication-flow:
     status: exempt
@@ -132,8 +133,8 @@ rules:
     comment: |
       The DDP device (identifier: host; the output lights and All outputs) with manufacturer, model, and firmware when
       the controller reports them. A vendor controller type adds a controller device (identifier: host:controller,
-      named "<entry> <controller type>", via_device_id the DDP device) holding the controller light, Power, Scene,
-      and Color 1-5; the DDP device is then named "<entry> Generic DDP".
+      named "<entry> <controller type>", via_device_id the DDP device) holding Power (its main entity), Color 1-5,
+      Mode 1-5, Scene, and Intensity; the DDP device is then named "<entry> Generic DDP".
   diagnostics:
     status: done
     comment: Entry, sender counters, scenes state, and the controller's raw documents with host, IPs, MAC, and SSID redacted.
@@ -173,8 +174,8 @@ rules:
       Each entry is one fixed controller; its outputs are read when the entry is added and again on reconfigure,
       never at runtime (DDP has no way to announce a change).
   entity-category:
-    status: exempt
-    comment: Every entity is a primary control (lights, Power, Scene); there are no config or diagnostic entities.
+    status: done
+    comment: Intensity (a controller setting) is EntityCategory.CONFIG; the lights, Power, and Scene are primary controls.
   entity-device-class:
     status: exempt
     comment: The light and select platforms have no device classes; Power is a generic switch, not an outlet.
@@ -184,7 +185,8 @@ rules:
   entity-translations:
     status: done
     comment: |
-      All outputs, Power, Scene, and Color 1-5 ("Color {slot}") are named by translation; the controller light takes
+      All outputs, Color 1-5 ("Color {slot}"), Mode 1-5 ("Mode {slot}", options translated), Scene, and Intensity
+      are named by translation; the Power switch takes
       the device's name. Segment lights carry the output label read from the
       controller's layout and stored with the entry (Output 1, All), which is device data rather than a fixed string.
   exception-translations:
@@ -193,7 +195,7 @@ rules:
   icon-translations:
     status: done
     comment: |
-      icons.json has the controller light, All outputs, Color 1-5, Power, Scene, and every action; segment lights use
+      icons.json has All outputs, Color 1-5, Mode 1-5 (per option), Power, Scene, Intensity, and every action; segment lights use
       the default light icon.
   reconfiguration-flow:
     status: done

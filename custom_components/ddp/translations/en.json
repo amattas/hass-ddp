@@ -13,7 +13,7 @@
       },
       "controller": {
         "title": "Controller type",
-        "description": "Detected controller: {detected}. A vendor controller type adds a controller device with a light for the controller's built-in effects and presets, a Power switch, a Scene select and a light per palette color. Generic DDP creates only the per-output DDP lights.",
+        "description": "Detected controller: {detected}. A vendor controller type adds a controller device with a Power switch for the controller's built-in effects and presets, a light and a Mode select per palette color, a Scene select and an Intensity setting. Generic DDP creates only the per-output DDP lights.",
         "data": {
           "controller_type": "Controller type"
         },
@@ -95,9 +95,6 @@
     "controller_failed": {
       "message": "Could not command the controller for {entity}: {error}"
     },
-    "not_a_controller": {
-      "message": "{entity} is not a controller light; recall_preset works only on the light named like the controller device."
-    },
     "socket_failed": {
       "message": "Cannot open a DDP socket to {host}: {error}"
     },
@@ -115,9 +112,6 @@
     },
     "invalid_effect_params": {
       "message": "Invalid pattern for effect {effect}: {error}"
-    },
-    "palette_not_a_controller": {
-      "message": "{entity} is not a controller light; set_colors works only on the light named like the controller device."
     },
     "rgbw_needs_rgbw_pixels": {
       "message": "{entity} drives RGB pixels, so pattern colors take red, green, blue only. To use white, switch the controller to a 4-channel input mode and reconfigure the entry."
@@ -165,7 +159,7 @@
     },
     "set_colors": {
       "name": "Set colors",
-      "description": "Sets the colors the controller's built-in effects use (its palette of 5 custom colors), on a controller light. The light need not be on, and DDP lights keep the pixels. No colors clears the palette, so the controller picks random colors.",
+      "description": "Sets the colors the controller's built-in effects use (its palette of 5 custom colors), on a controller's Power switch. Power need not be on, and DDP lights keep the pixels. No colors clears the palette, so the controller picks random colors.",
       "fields": {
         "colors": {
           "name": "Colors",
@@ -180,7 +174,33 @@
   },
   "entity": {
     "light": {
-      "controller": {
+      "all_outputs": {
+        "name": "All outputs"
+      },
+      "color": {
+        "name": "Color {slot}"
+      }
+    },
+    "number": {
+      "intensity": {
+        "name": "Intensity"
+      }
+    },
+    "select": {
+      "scene": {
+        "name": "Scene"
+      },
+      "mode": {
+        "name": "Mode {slot}",
+        "state": {
+          "color": "Color",
+          "warm_white": "Warm White",
+          "cool_white": "Cool White"
+        }
+      }
+    },
+    "switch": {
+      "power": {
         "state_attributes": {
           "colors": {
             "name": "Colors"
@@ -189,22 +209,6 @@
             "name": "Background"
           }
         }
-      },
-      "all_outputs": {
-        "name": "All outputs"
-      },
-      "color": {
-        "name": "Color {slot}"
-      }
-    },
-    "select": {
-      "scene": {
-        "name": "Scene"
-      }
-    },
-    "switch": {
-      "power": {
-        "name": "Power"
       }
     }
   }

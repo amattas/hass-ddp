@@ -1,9 +1,6 @@
 {
   "entity": {
     "light": {
-      "controller": {
-        "default": "mdi:palette"
-      },
       "all_outputs": {
         "default": "mdi:led-strip-variant"
       },
@@ -11,9 +8,21 @@
         "default": "mdi:format-color-fill"
       }
     },
+    "number": {
+      "intensity": {
+        "default": "mdi:brightness-percent"
+      }
+    },
     "select": {
       "scene": {
         "default": "mdi:movie-open-play"
+      },
+      "mode": {
+        "default": "mdi:palette-outline",
+        "state": {
+          "warm_white": "mdi:white-balance-incandescent",
+          "cool_white": "mdi:white-balance-sunny"
+        }
       }
     },
     "switch": {
