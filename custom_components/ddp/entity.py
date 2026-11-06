@@ -60,12 +60,17 @@ class DDPEntity(Entity):
 
     def __init__(self, entry: DDPConfigEntry, key: str, *, ddp_device_id: str | None = None) -> None:
         self._attr_unique_id = f"{entry.entry_id}_{key}"
-        self._attr_device_info = ddp_device_info(entry)
-        if ddp_device_id is not None:
+        if ddp_device_id is None:
+            self._attr_device_info = ddp_device_info(entry)
+        else:
+            # Built in one call: since Home Assistant 2026.11 DeviceInfo is no longer a dict, so it cannot be merged.
             label = CONTROLLER_TYPES[entry.data[CONF_CONTROLLER_TYPE]].label
-            self._attr_device_info |= DeviceInfo(
+            self._attr_device_info = DeviceInfo(
                 identifiers={device_identifiers(entry.data[CONF_HOST])[1]},
                 name=f"{entry.title} {label}",
+                manufacturer=entry.data.get(CONF_MANUFACTURER),
+                model=entry.data.get(CONF_MODEL),
+                sw_version=entry.data.get(CONF_FIRMWARE),
                 via_device_id=ddp_device_id,
             )
 
