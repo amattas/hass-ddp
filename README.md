@@ -191,7 +191,7 @@ keep their entity IDs (for example `switch.ndbpro_minleon_ndb_pro_power` and `li
   that white value (`#ffffff` or `#feffff`) at once; choosing Color empties the slot (`#000000`), so Color N shows off
   until you pick a color.
 - In Color mode, Color N is an RGB light: a color sets the slot to it (scaled by a brightness), off empties the slot,
-  and a bare turn_on of an empty slot brings back its last color, also after a restart, red by default. A color of pure
+  and a bare turn_on of an empty slot brings back its last color, a white included, also after a restart, red by default. A color of pure
   white `#ffffff` reads back as Warm White, so the mode follows. In a white mode Color N is an on/off light: on re-sends
   the white, off empties the slot (and the mode reads Color again). Like `ddp.set_colors`, a slot change leaves DDP
   alone. Upgrading from 0.3: the `Cool White` and `Warm White` effects of Color N are gone; use Mode N.

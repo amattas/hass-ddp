@@ -352,6 +352,7 @@ def _light(service: str, **data: Any) -> tuple[str, str, int, dict[str, Any]]:
         ("#123456", None, _light(SERVICE_TURN_ON, brightness=51), "#040a11", STATE_ON, "color"),  # its color, scaled
         ("#123456", None, _light(SERVICE_TURN_OFF), "#000000", STATE_OFF, "color"),
         ("#000000", [0, 0, 255], _light(SERVICE_TURN_ON), "#0000ff", STATE_ON, "color"),  # the restored last color
+        ("#000000", [254, 255, 255], _light(SERVICE_TURN_ON), "#feffff", STATE_ON, "cool_white"),  # a white comes back
         ("#000000", None, _light(SERVICE_TURN_ON), "#ff0000", STATE_ON, "color"),  # none: red (white is a mode)
         # A white mode: an on/off light that re-sends the white (a color is not offered) and clears the slot off.
         ("#c69740", None, _light(SERVICE_TURN_ON), "#ffffff", STATE_ON, "warm_white"),
@@ -368,6 +369,7 @@ def _light(service: str, **data: Any) -> tuple[str, str, int, dict[str, Any]]:
         "brightness",
         "off",
         "bare-restored",
+        "bare-restored-white",
         "bare-default",
         "white-on",
         "white-ignores-rgb",

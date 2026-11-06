@@ -109,8 +109,8 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
   `ControllerCommands.follow_poll`, which setup registers as the coordinator's `on_poll` (cleared on unload), so
   disabling the controller light no longer stops polls from moving the DDP lights. A slot command publishes the new palette (no read-back), except before the first
   read, when the other slots are unknown and the palette is read back. A Color light's bare turn_on sends the slot's
-  last non-empty color (restore extra data `last_color`; a named white is remembered as its exact value), white
-  `(255, 255, 255)` (Warm White) by default; a brightness scales the color sent, a named white is always sent exact.
+  last non-black color sent or read (restore extra data `last_color`; a white is remembered too, so clearing a white
+  and turning on again brings it back), red `(255, 0, 0)` by default; a brightness scales the color sent, a named white is always sent exact.
   Warm White reads back as `#c69740` = `(198, 151, 64)`. Switch and select are removed on a switch to Generic with the
   controller device (the device registry removes its entities); the light platform drops stale controller lights.
 

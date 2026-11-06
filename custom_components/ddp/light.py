@@ -658,7 +658,9 @@ class PaletteLight(ControllerEntity, LightEntity, RestoreEntity):
         self._attr_translation_placeholders = {"slot": str(slot)}
         self._attr_is_on = False
         self._mode = MODE_COLOR
-        self._last_color: RGB = DEFAULT_SLOT_COLOR  # last custom color, for a bare turn_on of an empty slot
+        self._last_color: RGB = (
+            DEFAULT_SLOT_COLOR  # last non-black color, whites included, for a bare turn_on of an empty slot
+        )
         if self.scene is not None:
             self._apply(self.scene)
 
@@ -669,7 +671,7 @@ class PaletteLight(ControllerEntity, LightEntity, RestoreEntity):
         if self._attr_is_on or stored is None or len(stored) != 3:
             return
         color: RGB = (stored[0], stored[1], stored[2])
-        if color != EMPTY_COLOR and slot_mode(color) == MODE_COLOR:  # a white (from 0.3) is a mode now
+        if color != EMPTY_COLOR:  # a white too: clearing it, a bare turn_on brings it back
             self._last_color = color
 
     @property
@@ -692,12 +694,12 @@ class PaletteLight(ControllerEntity, LightEntity, RestoreEntity):
         self._attr_supported_color_modes = {self._attr_color_mode}
         self._attr_is_on = color != EMPTY_COLOR
         self._attr_rgb_color = color if self._attr_is_on and custom else None
-        if self._attr_is_on and custom:
+        if self._attr_is_on:
             self._last_color = color
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         """In a white mode, that white (exact); in Color mode a color (scaled by a brightness), or (bare) the slot's
-        last custom color, default red."""
+        last non-black color (a white too), default red."""
         if self._mode != MODE_COLOR:
             color = MODE_WHITES[self._mode]
         else:
