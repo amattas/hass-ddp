@@ -1,17 +1,26 @@
-"""One light per segment (DDP), plus a "Scenes" light for a vendor controller's built-in effects.
+"""One light per segment (DDP), an "All outputs" light, and a "Scenes" light for a vendor controller's built-in effects.
 
-Segment lights: on/off, brightness, RGB color, and aioddp effects, restored and re-sent on startup. The Scenes light
-selects the controller's built-in effects and stored presets; DDP data overrides those while it flows, so it turns the
-segment lights off (without blanking) and releases the sender before commanding the controller.
+Segment lights: on/off, brightness, RGB color, aioddp effects, and multi-color patterns (``ddp.set_pattern``),
+restored and re-sent on startup. An entry with more than one segment also gets "All outputs", the same light over the
+whole strip, so a pattern or effect runs on across the outputs in one DDP frame.
+
+Ownership: lights whose pixels overlap (All outputs and each output) take the pixels from each other. Turning one on
+stops the overlapping lights' runners and shows them off without sending anything, exactly like a hand-back to the
+controller; the pixels then show only the light that was turned on, where it covers them.
+
+The Scenes light selects the controller's built-in effects and stored presets; DDP data overrides those while it
+flows, so it turns every DDP light off (without blanking) and releases the sender before commanding the controller.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
-from aioddp import DDPError, EffectInfo, EffectRunner, list_effects
+from aioddp import DDPError, EffectInfo, EffectRunner, Segment, get_effect, list_effects, validate_params
 from homeassistant.components.light import LightEntity
 from homeassistant.components.light.const import (
     ATTR_BRIGHTNESS,
@@ -31,7 +40,7 @@ from homeassistant.helpers.restore_state import ExtraStoredData, RestoredExtraDa
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import DDPConfigEntry, DDPRuntime, SegmentConfig
-from .const import DOMAIN, SOLID_EFFECT
+from .const import ATTR_BLOCK_SIZE, ATTR_COLORS, ATTR_PARAMS, DOMAIN, PATTERN_EFFECT, SOLID_EFFECT, STRIP_KEY
 from .controller import CONTROLLER_ERRORS
 from .coordinator import DDPScenesCoordinator, SceneState
 from .entity import DDPEntity
@@ -44,20 +53,79 @@ PARALLEL_UPDATES = 0
 DEFAULT_BRIGHTNESS = 255
 DEFAULT_RGB: tuple[int, int, int] = (255, 255, 255)
 
+type RGB = tuple[int, int, int]
+
 EFFECTS: dict[str, EffectInfo] = {info.name: info for info in list_effects() if info.name != SOLID_EFFECT}
 
 CONTROLLER_OFF = "Off"  # the controller's built-in effect that blanks the lights; the Scenes light's off, not an effect
 ATTR_LAST_EFFECT = "last_effect"
+ATTR_PATTERN = "pattern"
 SCENES_KEY = "controller"  # unique-ID suffix; unchanged so entities from before controller types survive
+COLORS_KIND = "colors"  # aioddp ParamSpec kind of a color-list param
+
+
+def _color_target(info: EffectInfo) -> str | None:
+    """The param the light's colors drive: the effect's color param, else its color-list param (palette)."""
+    if info.color_param is not None:
+        return info.color_param
+    return next((name for name, spec in info.params.items() if spec.kind == COLORS_KIND), None)
+
+
+PATTERN_EFFECTS = [name for name, info in EFFECTS.items() if _color_target(info) is not None]
+
+
+@dataclass(frozen=True, slots=True)
+class Pattern:
+    """A ``set_pattern`` look: colors, pixels per color block (``None``: the effect's default), and extra params."""
+
+    colors: tuple[RGB, ...]
+    block_size: int | None = None
+    params: Mapping[str, Any] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            ATTR_COLORS: [list(color) for color in self.colors],
+            ATTR_BLOCK_SIZE: self.block_size,
+            ATTR_PARAMS: dict(self.params),
+        }
+
+    @classmethod
+    def from_dict(cls, value: object) -> Pattern | None:
+        """The pattern stored by ``as_dict``, or ``None`` if ``value`` is not one."""
+        stored: Mapping[str, Any] = value if isinstance(value, Mapping) else {}
+        colors, block_size, params = stored.get(ATTR_COLORS), stored.get(ATTR_BLOCK_SIZE), stored.get(ATTR_PARAMS) or {}
+        parsed = [_rgb(color) for color in colors] if isinstance(colors, list) else []
+        rgbs = [color for color in parsed if color is not None]
+        block_ok = block_size is None or (isinstance(block_size, int) and not isinstance(block_size, bool))
+        if not rgbs or len(rgbs) != len(parsed) or not isinstance(params, Mapping) or not block_ok:
+            return None
+        return cls(tuple(rgbs), block_size, dict(params))
+
+
+def _effect_params(info: EffectInfo, colors: Sequence[RGB], pattern: Pattern | None = None) -> dict[str, Any]:
+    """Params for ``info``: the pattern's extra params and block size, with its colors (or ``colors``) on the
+    effect's color target; an effect that takes one color gets the first."""
+    params: dict[str, Any] = dict(pattern.params) if pattern is not None else {}
+    if pattern is not None:
+        colors = pattern.colors
+        if pattern.block_size is not None:
+            params[ATTR_BLOCK_SIZE] = pattern.block_size
+    if (target := _color_target(info)) is not None:
+        params[target] = list(colors) if info.params[target].kind == COLORS_KIND else colors[0]
+    return params
 
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: DDPConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
-    """One light per configured segment, plus the Scenes light for a vendor controller type."""
+    """One light per configured segment, All outputs when there are several, and the Scenes light for a vendor."""
     runtime = entry.runtime_data
-    runtime.segment_lights = [DDPSegmentLight(entry, segment) for segment in runtime.segments]
-    async_add_entities(runtime.segment_lights)
+    lights = [DDPSegmentLight(entry, segment) for segment in runtime.segments]
+    if len(runtime.segments) > 1:
+        whole = Segment(STRIP_KEY, 0, runtime.sender.strip.pixel_count)
+        lights.append(AllOutputsLight(entry, SegmentConfig(STRIP_KEY, None, whole)))
+    runtime.segment_lights = lights
+    async_add_entities(lights)
     if runtime.scenes is None:
         # Switched to Generic DDP: drop the Scenes entity the previous type registered.
         registry = er.async_get(hass)
@@ -67,10 +135,18 @@ async def async_setup_entry(
     async_add_entities([ScenesLight(entry, runtime.scenes)])
 
 
-def _rgb(value: object) -> tuple[int, int, int] | None:
-    if isinstance(value, list | tuple) and len(value) == 3 and all(isinstance(c, int) for c in value):
+def _rgb(value: object) -> RGB | None:
+    if (
+        isinstance(value, list | tuple)
+        and len(value) == 3
+        and all(isinstance(c, int) and not isinstance(c, bool) and 0 <= c <= 255 for c in value)
+    ):
         return (value[0], value[1], value[2])
     return None
+
+
+def _overlaps(a: Segment, b: Segment) -> bool:
+    return a.start < b.end and b.start < a.end
 
 
 class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
@@ -88,11 +164,13 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
         self._runtime: DDPRuntime = entry.runtime_data
         self._config = config
         self._lock = asyncio.Lock()  # one state change at a time, so runners never double-start
-        self._attr_name = config.name  # the layout's label for this output, stored with the entry
+        if config.name is not None:
+            self._attr_name = config.name  # the layout's label for this output, stored with the entry
         self._attr_is_on = False
         self._attr_brightness = DEFAULT_BRIGHTNESS
         self._attr_rgb_color = DEFAULT_RGB
         self._attr_effect = EFFECT_OFF
+        self._pattern: Pattern | None = None  # set by set_pattern; replaced by a color or an effect change
         self._runner_effect: str | None = None  # effect of the runner this entity last started
 
     async def async_added_to_hass(self) -> None:
@@ -112,6 +190,7 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
         self._attr_rgb_color = _rgb(look.get(ATTR_RGB_COLOR)) or self._attr_rgb_color
         effect = look.get(ATTR_EFFECT)
         self._attr_effect = effect if effect in EFFECTS else EFFECT_OFF
+        self._pattern = self._restored_pattern(look.get(ATTR_PATTERN))
         if last.state != STATE_ON:
             return
         try:
@@ -122,6 +201,19 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
             return
         self._attr_is_on = True
 
+    def _restored_pattern(self, value: object) -> Pattern | None:
+        """The stored pattern, if it still validates for the restored effect (aioddp may have changed)."""
+        info = EFFECTS.get(self._attr_effect or EFFECT_OFF)
+        pattern = Pattern.from_dict(value)
+        if info is None or pattern is None or _color_target(info) is None:
+            return None
+        try:
+            validate_params(get_effect(info.name), _effect_params(info, pattern.colors, pattern))
+        except DDPError as err:
+            _LOGGER.warning("Dropping the stored pattern of %s: %s", self.entity_id, err)
+            return None
+        return pattern
+
     @property
     def extra_restore_state_data(self) -> ExtraStoredData:
         """The last look, kept while off so a bare turn_on after a restart brings it back."""
@@ -130,6 +222,7 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
                 ATTR_BRIGHTNESS: self._attr_brightness,
                 ATTR_RGB_COLOR: list(self._attr_rgb_color or DEFAULT_RGB),
                 ATTR_EFFECT: self._attr_effect,
+                ATTR_PATTERN: self._pattern.as_dict() if self._pattern is not None else None,
             }
         )
 
@@ -147,18 +240,69 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
                 translation_key="unknown_effect",
                 translation_placeholders={"effect": str(effect), "effects": ", ".join(self.effect_list or [])},
             )
-        async with self._lock:
-            previous = (self._attr_brightness, self._attr_rgb_color, self._attr_effect)
-            self._attr_brightness = kwargs.get(ATTR_BRIGHTNESS, self._attr_brightness)
-            self._attr_rgb_color = kwargs.get(ATTR_RGB_COLOR, self._attr_rgb_color)
-            self._attr_effect = effect
-            try:
-                await self._send_on()
-            except HomeAssistantError:
-                self._attr_brightness, self._attr_rgb_color, self._attr_effect = previous
-                raise
-            self._attr_is_on = True
+        # A color or another effect replaces the pattern; a bare turn_on (or brightness) keeps it.
+        keep = ATTR_RGB_COLOR not in kwargs and effect == self._attr_effect
+        await self._apply(
+            kwargs.get(ATTR_BRIGHTNESS, self._attr_brightness),
+            kwargs.get(ATTR_RGB_COLOR, self._attr_rgb_color),
+            effect,
+            self._pattern if keep else None,
+        )
+
+    async def async_set_pattern(
+        self,
+        colors: Sequence[Sequence[int]],
+        effect: str = PATTERN_EFFECT,
+        block_size: int | None = None,
+        params: Mapping[str, Any] | None = None,
+        brightness: int | None = None,
+    ) -> None:
+        """The ``set_pattern`` action: ``colors`` in blocks of ``block_size`` pixels, rendered by ``effect``."""
+        info = EFFECTS.get(effect)
+        if info is None:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unknown_effect",
+                translation_placeholders={"effect": effect, "effects": ", ".join(PATTERN_EFFECTS)},
+            )
+        if _color_target(info) is None:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="effect_without_colors",
+                translation_placeholders={"effect": effect, "effects": ", ".join(PATTERN_EFFECTS)},
+            )
+        pattern = Pattern(tuple((c[0], c[1], c[2]) for c in colors), block_size, dict(params or {}))
+        try:
+            validate_params(get_effect(effect), _effect_params(info, pattern.colors, pattern))
+        except DDPError as err:
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="invalid_effect_params",
+                translation_placeholders={"effect": effect, "error": str(err)},
+            ) from err
+        await self._apply(brightness or self._attr_brightness, pattern.colors[0], effect, pattern)
+
+    async def _apply(self, brightness: int | None, rgb: RGB | None, effect: str, pattern: Pattern | None) -> None:
+        """Take the pixels from overlapping lights, then show this look; a failed send keeps the previous one."""
+        async with self._runtime.ownership:  # two lights sharing pixels never take them at the same time
+            await self._take_pixels()
+            async with self._lock:
+                previous = (self._attr_brightness, self._attr_rgb_color, self._attr_effect, self._pattern)
+                self._attr_brightness, self._attr_rgb_color, self._attr_effect = brightness, rgb, effect
+                self._pattern = pattern
+                try:
+                    await self._send_on()
+                except HomeAssistantError:
+                    self._attr_brightness, self._attr_rgb_color, self._attr_effect, self._pattern = previous
+                    raise
+                self._attr_is_on = True
         self.async_write_ha_state()
+
+    async def _take_pixels(self) -> None:
+        """Hand back every other DDP light that shares pixels with this one (the ownership rule)."""
+        for light in self._runtime.segment_lights:
+            if light is not self and _overlaps(light._config.segment, self._config.segment):
+                await light.async_hand_back()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         async with self._lock:
@@ -172,7 +316,7 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
         self.async_write_ha_state()
 
     async def async_hand_back(self) -> None:
-        """Stop this segment's runner and show it off, sending nothing: the controller's own effect takes over."""
+        """Stop this light's runner and show it off, sending nothing: another light or the controller takes over."""
         async with self._lock:
             await self._runtime.stop_runner(self._config.key)
             if not self._attr_is_on:
@@ -181,7 +325,7 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
         self.async_write_ha_state()
 
     async def _send_on(self) -> None:
-        """Send the current brightness, color, and effect. Caller holds the lock."""
+        """Send the current brightness, color or pattern, and effect. Caller holds the lock."""
         runtime, key, segment = self._runtime, self._config.key, self._config.segment
         brightness = (self._attr_brightness or DEFAULT_BRIGHTNESS) / 255
         rgb = self._attr_rgb_color or DEFAULT_RGB
@@ -191,20 +335,24 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
                 await runtime.stop_runner(key)
                 await runtime.sender.fill(segment, rgb, brightness=brightness)
                 return
-            params = info.color_params(rgb)
-            runner = runtime.runners.get(key)
-            if runner is not None and runner.running and self._runner_effect == info.name:
-                runner.update(params=params, brightness=brightness)
-                return
-            await runtime.stop_runner(key)
-            runner = EffectRunner(
-                runtime.sender, segment, info.name, fps=runtime.fps, params=params, brightness=brightness
-            )
-            await runner.start()
-            runtime.runners[key] = runner
-            self._runner_effect = info.name
+            await self._run_effect(info, _effect_params(info, [rgb], self._pattern), brightness)
         except DDPError as err:
             raise self._send_error(err) from err
+
+    async def _run_effect(self, info: EffectInfo, params: Mapping[str, Any], brightness: float) -> None:
+        """Update this light's runner in place if it runs ``info``, else start one with ``params``."""
+        runtime, key = self._runtime, self._config.key
+        runner = runtime.runners.get(key)
+        if runner is not None and runner.running and self._runner_effect == info.name:
+            runner.update(params=params, brightness=brightness)
+            return
+        await runtime.stop_runner(key)
+        runner = EffectRunner(
+            runtime.sender, self._config.segment, info.name, fps=runtime.fps, params=params, brightness=brightness
+        )
+        await runner.start()
+        runtime.runners[key] = runner
+        self._runner_effect = info.name
 
     def _send_error(self, err: DDPError) -> HomeAssistantError:
         return HomeAssistantError(
@@ -212,6 +360,12 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
             translation_key="send_failed",
             translation_placeholders={"entity": self.entity_id, "error": str(err)},
         )
+
+
+class AllOutputsLight(DDPSegmentLight):
+    """The whole strip as one light (entries with several outputs), sharing its pixels with every output light."""
+
+    _attr_translation_key = "all_outputs"
 
 
 def _to_brightness(intensity: int) -> int:
@@ -326,7 +480,7 @@ class ScenesLight(CoordinatorEntity[DDPScenesCoordinator], DDPEntity, LightEntit
             await self.coordinator.async_read_after_command()
 
     async def _hand_back(self) -> None:
-        """Turn every segment light off without sending, and stop keepalive, so DDP stops overriding the controller."""
+        """Turn every DDP light off without sending, and stop keepalive, so DDP stops overriding the controller."""
         for light in self._runtime.segment_lights:
             await light.async_hand_back()
         # A segment turned on mid-way (an HA scene applies lights concurrently) keeps its keepalive.

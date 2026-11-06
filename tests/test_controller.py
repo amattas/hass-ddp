@@ -46,6 +46,7 @@ from .conftest import FakeController, Listener
 SCENES = "light.ndb_pro_scenes"
 OUT1 = "light.ndb_pro_output_1"
 OUT2 = "light.ndb_pro_output_2"
+ALL = "light.ndb_pro_all_outputs"
 FULL_STRIP = 122 * 3  # a keepalive resends the whole strip from offset 0
 EFFECTS = [
     "Test",
@@ -177,19 +178,25 @@ async def test_turn_on_selects_effect_and_intensity(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+@pytest.mark.parametrize(("entity_id", "pixels"), [(OUT1, 80), (ALL, 122)], ids=["output", "all-outputs"])
 async def test_turn_off_selects_off_and_blanks_segments(
-    hass: HomeAssistant, udp_listener: Listener, fake_controller: FakeController, ndb_entry: MockConfigEntry
+    hass: HomeAssistant,
+    udp_listener: Listener,
+    fake_controller: FakeController,
+    ndb_entry: MockConfigEntry,
+    entity_id: str,
+    pixels: int,
 ) -> None:
-    await _call(hass, SERVICE_TURN_ON, OUT1, rgb_color=(255, 0, 0))
+    await _call(hass, SERVICE_TURN_ON, entity_id, rgb_color=(255, 0, 0))
     await udp_listener.wait_for(lambda p: p.offset == 0)
     udp_listener.packets.clear()
 
     await _call(hass, SERVICE_TURN_OFF, SCENES)
 
     assert fake_controller.commands() == [_control('{"fx":"Off"}')]
-    await udp_listener.wait_for(lambda p: p.offset == 0 and p.data == bytes(80 * 3))
+    await udp_listener.wait_for(lambda p: p.offset == 0 and p.data == bytes(pixels * 3))
     assert _state(hass, SCENES).state == STATE_OFF
-    assert _state(hass, OUT1).state == STATE_OFF
+    assert _state(hass, entity_id).state == STATE_OFF
     await _poll(ndb_entry)
     assert _state(hass, SCENES).state == STATE_OFF  # the controller reports "Off"; it is not an effect
 
@@ -207,6 +214,11 @@ async def _recall_preset(hass: HomeAssistant) -> None:
     [(_turn_on_scene, _control('{"fx":"Show1"}')), (_recall_preset, ("GET", "/pshows.html?r=2", b""))],
     ids=["turn_on", "recall_preset"],
 )
+@pytest.mark.parametrize(
+    "lit",
+    [[(OUT1, {ATTR_EFFECT: "chase"}), (OUT2, {"rgb_color": (0, 0, 255)})], [(ALL, {ATTR_EFFECT: "chase"})]],
+    ids=["outputs", "all-outputs"],
+)
 async def test_scene_takes_the_pixels_back_from_ddp(
     hass: HomeAssistant,
     udp_listener: Listener,
@@ -214,11 +226,12 @@ async def test_scene_takes_the_pixels_back_from_ddp(
     ndb_entry: MockConfigEntry,
     action: Callable[[HomeAssistant], Awaitable[None]],
     command: tuple[str, str, bytes],
+    lit: list[tuple[str, dict[str, Any]]],
 ) -> None:
     runtime = ndb_entry.runtime_data
-    await _call(hass, SERVICE_TURN_ON, OUT1, effect="chase")
-    await _call(hass, SERVICE_TURN_ON, OUT2, rgb_color=(0, 0, 255))
-    await udp_listener.wait_for(lambda p: p.offset == 80 * 3)
+    for entity_id, data in lit:
+        await _call(hass, SERVICE_TURN_ON, entity_id, **data)
+    await udp_listener.wait_for(lambda p: p.offset == 0)
     fake_controller.requests.clear()
 
     await action(hass)
@@ -230,8 +243,7 @@ async def test_scene_takes_the_pixels_back_from_ddp(
         assert fake_controller.requests[-2:] == [("GET", "/pfx2.html", b""), ("GET", "/pcolors.html", b"")]
     assert runtime.runners == {}
     assert [t for t in asyncio.all_tasks() if t.get_name().startswith("aioddp-effect-")] == []
-    assert _state(hass, OUT1).state == STATE_OFF
-    assert _state(hass, OUT2).state == STATE_OFF
+    assert [_state(hass, entity_id).state for entity_id, _ in lit] == [STATE_OFF] * len(lit)
     assert _state(hass, SCENES).state == STATE_ON
     # Neither a black frame nor a keepalive (default 1 s) follows: the controller's own scene takes over.
     await udp_listener.settle(2.2)
@@ -339,11 +351,16 @@ async def _recall_on_segment(hass: HomeAssistant) -> None:
     await _call(hass, "recall_preset", OUT1, domain=DOMAIN, preset=1)
 
 
+async def _pattern_on_scenes(hass: HomeAssistant) -> None:
+    await _call(hass, "set_pattern", SCENES, domain=DOMAIN, colors=[[255, 0, 0], [0, 255, 0]])
+
+
 @pytest.mark.parametrize(
     ("action", "offline", "segment_fails", "error", "out1_after"),
     [
         (_strobe, False, False, ServiceValidationError, STATE_ON),
         (_recall_on_segment, False, False, ServiceValidationError, STATE_ON),
+        (_pattern_on_scenes, False, False, ServiceValidationError, STATE_ON),
         # A controller that never took the command must not cost the DDP look.
         (_turn_on_scene, True, False, HomeAssistantError, STATE_ON),
         (_recall_preset, True, False, HomeAssistantError, STATE_ON),
@@ -351,7 +368,15 @@ async def _recall_on_segment(hass: HomeAssistant) -> None:
         # A segment that cannot be blanked must not stop the controller's "Off".
         (_off, False, True, HomeAssistantError, STATE_ON),
     ],
-    ids=["unknown-effect", "recall-on-segment", "turn_on-down", "recall-down", "turn_off-down", "segment-send-fails"],
+    ids=[
+        "unknown-effect",
+        "recall-on-segment",
+        "pattern-on-scenes",
+        "turn_on-down",
+        "recall-down",
+        "turn_off-down",
+        "segment-send-fails",
+    ],
 )
 async def test_errors(
     hass: HomeAssistant,

@@ -22,11 +22,18 @@ for which controllers have been exercised.
 
 | Entity | What it does |
 |---|---|
-| **Output N** light (one per output; **All** for a manually described strip) | On/off, brightness, RGB color, and the aioddp effects. Sends DDP; its state is assumed |
+| **Output N** light (one per output; **All** for a manually described strip) | On/off, brightness, RGB color, the aioddp effects, and multi-color patterns (`ddp.set_pattern`). Sends DDP; its state is assumed |
+| **All outputs** light (only when the controller has more than one output) | The same as an output light, over the whole strip: a pattern or effect runs on across the outputs in one DDP frame |
 | **Scenes** light (vendor controller types only) | Selects the controller's built-in effects and shows, brightness maps to its intensity. Polled |
 
-Action: `ddp.recall_preset` (NDB-Pro Scenes light only). Home Assistant's `light.turn_on` and `light.turn_off` work on
-every light, and scenes capture the segment lights. The integration provides no triggers or conditions.
+Actions: `ddp.set_pattern` (DDP lights: the outputs and All outputs) and `ddp.recall_preset` (NDB-Pro Scenes light
+only). Home Assistant's `light.turn_on` and `light.turn_off` work on every light, and scenes capture the segment lights.
+The integration provides no triggers or conditions.
+
+**All outputs and the output lights share pixels**, so only one of them owns a pixel at a time. Turning All outputs on
+stops the output lights' effects and shows them off, without sending anything; turning an output light on does the same
+to All outputs. Nothing is blanked: the newly turned-on light simply draws over its own pixels, and an output that All
+outputs had lit keeps that frame until something else sends to it.
 
 ## Installation
 
@@ -113,8 +120,16 @@ effect (about 20 s on an NDB-Pro). Turn the lights off first if you want them da
 ## Effects
 
 The effect list comes from aioddp: `breathe`, `chase`, `twinkle`, `rainbow`, `palette`. The effect `off` means a solid
-color. The light's RGB color drives each effect's main color where it has one (for example the chase color or the
-breathe color); brightness scales the whole effect.
+color. The light's RGB color drives each effect's main color where it has one (for example the chase color, the
+breathe color, or the one palette color); brightness scales the whole effect.
+
+**Patterns.** `ddp.set_pattern` gives a DDP light several colors at once: by default the `palette` effect repeats them
+in fixed blocks (`block_size` pixels each, so two colors with block size 1 alternate pixel by pixel). It can also hand
+the colors to `chase` (its lit groups cycle through them), or to `breathe` and `twinkle`, which use the first color.
+`params` sets the effect's other parameters, such as the chase `speed`; a bad value is refused with the parameter
+named. The light's effect shows the rendering effect, and the pattern is kept across restarts and a bare
+`light.turn_on`. A later `light.turn_on` with `rgb_color` replaces the pattern with that one color; choosing another
+effect drops it.
 
 ## NDB-Pro built-in scenes
 
@@ -134,8 +149,8 @@ controller's own built-in effects over its HTTP UI instead of sending DDP. Entit
 **Segment lights vs. scenes.** DDP data overrides the controller's built-in effect immediately, and about 20 s after DDP
 stops the controller falls back to it. So the two kinds of light take turns:
 
-- Turning on a scene (or recalling a preset) first turns every segment light off without sending black and stops DDP,
-  so the scene shows at once.
+- Turning on a scene (or recalling a preset) first turns every DDP light (the outputs and All outputs) off without
+  sending black and stops DDP, so the scene shows at once.
 - Turning a segment light on takes the pixels over again. While any segment light is on, the keepalive (default 1 s)
   keeps re-sending its frame so the controller does not fall back mid-color; with keepalive 0 a solid color reverts to
   the built-in effect after about 20 s.
@@ -208,6 +223,41 @@ scene:
 Activate it from an automation with `scene.turn_on`. After a Home Assistant restart, each segment light restores its
 last state and, if it was on, sends it again.
 
+## Examples: patterns
+
+Alternate red and green pixel by pixel across both outputs, as one continuous pattern:
+
+```yaml
+action: ddp.set_pattern
+target:
+  entity_id: light.ndbpro_all_outputs
+data:
+  colors: [[255, 0, 0], [0, 255, 0]]
+  block_size: 1
+  brightness: 200
+```
+
+Red, white, and blue blocks of five pixels on one output, then a moving version with chase:
+
+```yaml
+- action: ddp.set_pattern
+  target:
+    entity_id: light.ndbpro_output_1
+  data:
+    colors: [[255, 0, 0], [255, 255, 255], [0, 0, 255]]
+    block_size: 5
+- action: ddp.set_pattern
+  target:
+    entity_id: light.ndbpro_output_1
+  data:
+    colors: [[255, 0, 0], [255, 255, 255], [0, 0, 255]]
+    effect: chase
+    params:
+      speed: 4
+      spacing: 6
+      width: 3
+```
+
 ## Use cases
 
 - Run a roofline in a solid warm white most nights and a chase or rainbow effect for holidays, from dashboards or
@@ -220,11 +270,13 @@ last state and, if it was on, sends it again.
 
 | Action | Target | Fields |
 |---|---|---|
+| `ddp.set_pattern` | An output light or All outputs | `colors` (required: 1-16 colors, each `[r, g, b]` 0-255), `block_size` (pixels per color block, default 1; palette only), `effect` (`palette` by default, or `chase`, `breathe`, `twinkle`), `params` (the effect's other parameters, for example `{"speed": 4}`), `brightness` (1-255) |
 | `ddp.recall_preset` | A Scenes light | `preset` (1-20; 1-10 are slots of Show 1, 11-20 of Show 2) |
 | `light.turn_on` / `light.turn_off` | Any light of this integration | Segment lights: `brightness`, `rgb_color`, `effect`. Scenes light: `brightness`, `effect` |
 
-`ddp.recall_preset` on a segment light is refused. Recalling a preset overwrites the controller's current colors with
-the preset's. Actions raise an error when a send fails, the effect is unknown, or the controller does not answer.
+`ddp.set_pattern` on the Scenes light and `ddp.recall_preset` on a segment light are refused. Recalling a preset overwrites the controller's current colors with
+the preset's. Actions raise an error when a send fails, the effect is unknown or takes no colors, a pattern parameter
+is invalid, or the controller does not answer.
 
 ## Diagnostics
 
@@ -260,6 +312,8 @@ Wi-Fi name are redacted.
 | Scenes light is unavailable | The controller's web UI (TCP 80) is not answering. The DDP lights are unaffected; the Scenes light recovers on the next 30 s poll |
 | The controller has a new IP address | **Reconfigure** the entry and enter the new host (give the controller a DHCP reservation to avoid this) |
 | `ddp.recall_preset` is refused | The target is a segment light, or the entry is Generic DDP, which has no Scenes light |
+| `ddp.set_pattern` is refused | The target is the Scenes light, the effect takes no colors (`rainbow`), or a `params` value is out of range or not a parameter of that effect (the message names it) |
+| An output light turned off by itself | All outputs was turned on; it owns the pixels of every output until an output light is turned on again |
 
 To report a problem, include the downloaded diagnostics and debug logs:
 

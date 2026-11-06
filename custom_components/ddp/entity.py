@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.const import CONF_HOST
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 
-from .const import CONF_FIRMWARE, CONF_MANUFACTURER, CONF_MODEL, DOMAIN
+from .const import CONF_FIRMWARE, CONF_MANUFACTURER, CONF_MODEL, DOMAIN, PATTERN_EFFECT
 
 if TYPE_CHECKING:
     from . import DDPConfigEntry
@@ -35,5 +36,20 @@ class DDPEntity(Entity):
         raise ServiceValidationError(
             translation_domain=DOMAIN,
             translation_key="not_a_controller",
+            translation_placeholders={"entity": self.entity_id},
+        )
+
+    async def async_set_pattern(
+        self,
+        colors: Sequence[Sequence[int]],
+        effect: str = PATTERN_EFFECT,
+        block_size: int | None = None,
+        params: Mapping[str, Any] | None = None,
+        brightness: int | None = None,
+    ) -> None:
+        """The ``set_pattern`` action: only a DDP light (an output or All outputs) can."""
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="not_a_ddp_light",
             translation_placeholders={"entity": self.entity_id},
         )

@@ -106,6 +106,15 @@
     },
     "controller_unreachable": {
       "message": "The controller at {host} did not answer: {error}"
+    },
+    "not_a_ddp_light": {
+      "message": "{entity} is a controller Scenes light; set_pattern works only on a DDP output light or All outputs."
+    },
+    "effect_without_colors": {
+      "message": "Effect {effect} takes no colors, so it cannot show a pattern. Effects that can: {effects}"
+    },
+    "invalid_effect_params": {
+      "message": "Invalid pattern for effect {effect}: {error}"
     }
   },
   "services": {
@@ -118,12 +127,41 @@
           "description": "Stored preset number, 1 to 20."
         }
       }
+    },
+    "set_pattern": {
+      "name": "Set pattern",
+      "description": "Shows a repeating pattern of colors on a DDP light, rendered by an effect (palette by default: fixed blocks of the colors). The pattern is kept across restarts; a later color replaces it.",
+      "fields": {
+        "colors": {
+          "name": "Colors",
+          "description": "1 to 16 RGB colors, each a list of red, green, blue from 0 to 255, for example [[255, 0, 0], [0, 255, 0]]."
+        },
+        "block_size": {
+          "name": "Block size",
+          "description": "Pixels per color block. 1 with two colors is every other pixel. Only effects with blocks (palette) take it."
+        },
+        "effect": {
+          "name": "Effect",
+          "description": "The effect that renders the colors. Effects that take a single color use the first one."
+        },
+        "params": {
+          "name": "Effect parameters",
+          "description": "Other parameters of the effect, for example {\"speed\": 4} for chase."
+        },
+        "brightness": {
+          "name": "Brightness",
+          "description": "Brightness from 1 to 255. Leave empty to keep the light's brightness."
+        }
+      }
     }
   },
   "entity": {
     "light": {
       "scenes": {
         "name": "Scenes"
+      },
+      "all_outputs": {
+        "name": "All outputs"
       }
     }
   }
