@@ -203,7 +203,7 @@ def entry_factory(hass: HomeAssistant, udp_listener: Listener) -> Callable[..., 
     """Build and register an entry pointing at the loopback listener (``port`` is a test-only data key).
 
     With ``controller``, the entry's controller HTTP UI is that fake (``http_port`` is test-only too) and its type is
-    ``ndbpro`` unless ``controller_type`` says otherwise; without, it is Generic DDP and gets no Scenes light.
+    ``ndbpro`` unless ``controller_type`` says otherwise; without, it is Generic DDP and gets no controller device.
     ``segments`` replaces the two-output layout; ``data_type`` "rgbw" makes it a 4-channel strip.
     """
 
@@ -256,3 +256,26 @@ async def setup_entry(
     yield entry
     if entry.state is ConfigEntryState.LOADED:
         assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+def bytes_of(strip: Any, segments: list[Any]) -> set[int]:
+    """Every byte offset of ``segments`` on ``strip``."""
+    return {b for s in segments for b in range(strip.byte_offset(s), strip.byte_offset(s) + strip.byte_length(s))}
+
+
+def assert_holds_follow_lights(runtime: Any, context: object = None) -> None:
+    """The sender holds exactly the pixels of the lights that hold, except a ``ddp`` light whose runner has not sent
+    its first frame yet (its range is wanted but may not be held)."""
+    lights, strip = runtime.segment_lights, runtime.sender.strip
+    held = {b for offset, length in runtime.sender.held for b in range(offset, offset + length)}
+    wanted = bytes_of(strip, [light.segment for light in lights if light.holding])
+    pending = bytes_of(
+        strip,
+        [
+            light.segment
+            for light in lights
+            if light.key in runtime.runners and runtime.runners[light.key].stats.frames_rendered == 0
+        ],
+    )
+    report = (context, [(light.entity_id, light.source.value) for light in lights], runtime.sender.held)
+    assert wanted - pending <= held <= wanted, report

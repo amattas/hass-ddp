@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -17,6 +18,7 @@ from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import service
 from homeassistant.helpers.typing import ConfigType
 
+from .commands import ControllerCommands
 from .const import (
     ATTR_BACKGROUND,
     ATTR_BLOCK_SIZE,
@@ -48,6 +50,7 @@ from .const import (
     SERVICE_RECALL_PRESET,
     SERVICE_SET_COLORS,
     SERVICE_SET_PATTERN,
+    LightSource,
 )
 from .controller import NAMED_COLORS, PALETTE_SLOTS, Controller, create_controller, type_for_model
 from .coordinator import DDPScenesCoordinator
@@ -55,8 +58,9 @@ from .coordinator import DDPScenesCoordinator
 if TYPE_CHECKING:
     from .light import DDPSegmentLight
 
-PLATFORMS: list[Platform] = [Platform.LIGHT]
+PLATFORMS: list[Platform] = [Platform.LIGHT, Platform.SELECT, Platform.SWITCH]
 CONFIG_VERSION = 2  # the config flow's VERSION
+_HELD = "held"  # name of the pixel ranges ``sync_holds`` builds; aioddp segments need one
 
 _BYTE = probatio.All(probatio.Coerce(int), probatio.Range(min=0, max=255))
 _RGB = probatio.All(probatio.ExactSequence([_BYTE, _BYTE, _BYTE]), probatio.Coerce(tuple))
@@ -82,10 +86,12 @@ class SegmentConfig:
 class DDPRuntime:
     """Per-entry runtime: the one open sender, the segments, and at most one effect runner per segment key.
 
-    ``controller`` drives a vendor controller's built-in effects (``None`` for Generic DDP) and ``scenes`` polls it.
+    ``controller`` drives a vendor controller's built-in effects (``None`` for Generic DDP), ``scenes`` polls it and
+    ``commands`` (the controller device's entities share them) command it.
     ``segment_lights`` is every DDP light (the per-output lights and, with several outputs, All outputs), so the
     controller light can hand the pixels back from DDP. ``ownership`` serializes a DDP light taking pixels that
-    another DDP light shares.
+    another DDP light shares. The sender keeps resending (keepalive) only the pixels it holds (``DDPSender.held``), and
+    ``sync_holds`` makes them follow the lights' state.
     """
 
     sender: DDPSender
@@ -93,14 +99,42 @@ class DDPRuntime:
     fps: int
     controller: Controller | None = None
     scenes: DDPScenesCoordinator | None = None
+    commands: ControllerCommands | None = None
     runners: dict[str, EffectRunner] = field(default_factory=dict)
     segment_lights: list[DDPSegmentLight] = field(default_factory=list)
     ownership: asyncio.Lock = field(default_factory=asyncio.Lock)
 
-    def release_if_idle(self) -> None:
-        """Stop keepalive resends once no DDP light is on, so the controller's own effect comes back."""
-        if not any(light.is_on for light in self.segment_lights):
+    @property
+    def scene_running(self) -> bool:
+        """A controller scene lights some of the DDP lights' pixels (shown, or blanked by HA's held black)."""
+        return any(light.source in (LightSource.SCENE, LightSource.BLANKED) for light in self.segment_lights)
+
+    async def sync_holds(self) -> None:
+        """Make the held pixels exactly those of the lights that hold (``holding``). Caller holds ``ownership``.
+
+        The held pixels are read from the sender (``DDPSender.held``), never from bookkeeping: a runner stopped before
+        its first frame never held its range. A held range no holding light covers is released (the controller's own
+        effect takes it back after its DDP timeout); an off or blanked light that should hold gets black where nothing
+        is held. A ``ddp`` light's pixels count as covered even before its runner's first frame, so they never get
+        black. Raises ``DDPError``.
+        """
+        holding = [light for light in self.segment_lights if light.holding]
+        if not holding:
             self.sender.release()
+            return
+        channels = self.sender.strip.channels
+        held = [Segment(_HELD, offset // channels, length // channels) for offset, length in self.sender.held]
+        keep = [light.segment for light in holding]
+        for segment in held:
+            for start, end in _uncovered(segment, keep):
+                self.sender.release(Segment(_HELD, start, end - start))
+        covered = [*held, *(light.segment for light in holding if light.source is LightSource.DDP)]
+        for light in holding:
+            if light.source is LightSource.DDP:
+                continue
+            for start, end in _uncovered(light.segment, covered):
+                await self.sender.off(Segment(_HELD, start, end - start))
+            covered.append(light.segment)
 
     async def stop_runner(self, key: str) -> None:
         """Stop and forget the runner for ``key``, if any. Never blanks the segment."""
@@ -110,6 +144,20 @@ class DDPRuntime:
 
 
 type DDPConfigEntry = ConfigEntry[DDPRuntime]
+
+
+def _uncovered(segment: Segment, cover: list[Segment]) -> list[tuple[int, int]]:
+    """The ``(start, end)`` pixel runs of ``segment`` that no segment in ``cover`` covers."""
+    runs, position = [], segment.start
+    for other in sorted(cover, key=lambda s: s.start):
+        if other.start > position:
+            runs.append((position, min(other.start, segment.end)))
+        position = max(position, other.end)
+        if position >= segment.end:
+            break
+    if position < segment.end:
+        runs.append((position, segment.end))
+    return [(start, end) for start, end in runs if start < end]
 
 
 def make_strip(
@@ -210,15 +258,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
     runtime = DDPRuntime(sender, segments, int(entry.options.get(CONF_FPS, DEFAULT_FPS)), controller, scenes)
     entry.runtime_data = runtime
     if scenes is not None:
-        # Not a setup gate: the DDP lights don't need the controller's HTTP UI, so a silent one leaves the Scenes
-        # light unavailable until a poll reaches it, instead of failing the entry.
+        runtime.commands = ControllerCommands(runtime, scenes)
+        # Not a setup gate: the DDP lights don't need the controller's HTTP UI, so a silent one leaves the controller
+        # device's entities unavailable until a poll reaches them, instead of failing the entry.
         await scenes.async_refresh()
+        # Polls reach the DDP lights through the commands, whichever controller entities are enabled.
+        scenes.on_poll = runtime.commands.follow_poll
+        entry.async_on_unload(_stop_following(scenes))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
+def _stop_following(scenes: DDPScenesCoordinator) -> Callable[[], None]:
+    """An unload callback that detaches the poll hook."""
+
+    def stop() -> None:
+        scenes.on_poll = None
+
+    return stop
+
+
 async def async_migrate_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
-    """1 -> 2: entries gain a controller type; a discovered NDB-Pro keeps its Scenes light, the rest are Generic."""
+    """1 -> 2: entries gain a controller type; a discovered NDB-Pro keeps its controller light, the rest are Generic."""
     if entry.version == 1:  # a newer version is refused by Home Assistant before this runs
         hass.config_entries.async_update_entry(
             entry, data={**entry.data, CONF_CONTROLLER_TYPE: type_for_model(entry.data.get(CONF_MODEL))}, version=2

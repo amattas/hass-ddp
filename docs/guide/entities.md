@@ -4,16 +4,20 @@
 
 | Entity | What it does |
 |---|---|
-| **Output N** light (one per output; **All** for a manually described strip) | On/off, brightness, RGB color (RGBW color for an RGBW entry), the aioddp effects, and multi-color patterns (`ddp.set_pattern`). Sends DDP; its state is assumed |
+| **Output N** light (one per output; **All** for a manually described strip) | On/off, brightness, RGB color (RGBW color for an RGBW entry), the aioddp effects, and multi-color patterns (`ddp.set_pattern`). Sends DDP; its state is assumed. While a controller scene runs it shows on (the scene), and turning it off disables just that output |
 | **All outputs** light (only when the controller has more than one output) | The same as an output light, over the whole strip: a pattern or effect runs on across the outputs in one DDP frame |
-| **Scenes** light (vendor controller types only, on the controller device) | Selects the controller's built-in effects and shows, brightness maps to its intensity. Its palette is the `colors` and `background` attributes, set with `ddp.set_colors`. Polled |
+| **Controller** light (vendor controller types only; the controller device's main entity, named like the device) | Selects the controller's built-in effects and shows, brightness maps to its intensity. Its palette (the colors those effects use) is the `colors` and `background` attributes and is set with `ddp.set_colors`. Polled |
+| **Power** switch (controller device) | On while the controller runs a scene. On brings back the last scene (else the first), off is the controller's `Off`: the same as turning the controller light on or off |
+| **Scene** select (controller device) | The controller's built-in effects and shows; the running one is selected, none while it is `Off`. Selecting one is the controller light's turn_on with that effect |
+| **Color 1** to **Color 5** lights (controller device) | One palette slot each: an RGB color, or the effect `Cool White` or `Warm White` for the controller's white LEDs; off empties the slot. Brightness shows 255 and scales the color a turn_on sends |
 
 **Devices.** The output lights and All outputs are on the DDP device, named after the entry. A vendor controller type
 adds a controller device named after the entry and the type (for example "Front Yard Minleon NDB-Pro"), connected
-through the DDP device, with the Scenes light on it.
+through the DDP device, with the controller light, Power, Scene, and Color 1 to 5 on it; the DDP device is then named
+after the entry and Generic DDP ("Front Yard Generic DDP").
 
 Actions: `ddp.set_pattern` (DDP lights: the outputs and All outputs), and `ddp.recall_preset` and `ddp.set_colors`
-(NDB-Pro Scenes light only). Home Assistant's `light.turn_on` and `light.turn_off` work on every light, and scenes
+(the NDB-Pro controller light only). Home Assistant's `light.turn_on` and `light.turn_off` work on every light, and scenes
 capture the segment lights. The integration provides no triggers or conditions.
 
 **All outputs and the output lights share pixels**, so only one of them owns a pixel at a time. Turning All outputs on
@@ -50,12 +54,15 @@ other effects render RGB and refuse a white value, as does an RGB entry.
 
 ## NDB-Pro built-in scenes
 
-A controller of type Minleon NDB-Pro (detected from its status model `NDBPRO`, or chosen by hand) gets one more light
-on a second device, "<entry> Minleon NDB-Pro": **Scenes**. It drives the controller's own built-in effects over its
-HTTP UI instead of sending DDP. Entity IDs below assume the entry is named "NDBPRO" (the title discovery gives it
-unless the controller reports a name), so the lights are `light.ndbpro_minleon_ndb_pro_scenes`,
-`light.ndbpro_output_1`, and so on; check yours on the device pages. (A Scenes light created before the controller
-device existed keeps its entity ID, for example `light.ndbpro_scenes`.)
+A controller of type Minleon NDB-Pro (detected from its status model `NDBPRO`, or chosen by hand) gets a second
+device, "<entry> Minleon NDB-Pro". Its main entity is the controller light, named like the device; it drives the
+controller's own built-in effects over its HTTP UI instead of sending DDP. Power, Scene, and Color 1 to 5 sit next to
+it. Entity IDs below assume the entry is named "NDBPRO" (the title discovery gives it unless the controller reports a
+name), so the entities are `light.ndbpro_minleon_ndb_pro`, `switch.ndbpro_minleon_ndb_pro_power`,
+`select.ndbpro_minleon_ndb_pro_scene`, `light.ndbpro_minleon_ndb_pro_color_1`, and the DDP lights
+`light.ndbpro_generic_ddp_output_1` and so on; check yours on the device pages. Entities created by an earlier release
+keep their entity IDs (for example `light.ndbpro_minleon_ndb_pro_scenes` or `light.ndbpro_scenes`, and
+`light.ndbpro_output_1`).
 
 - Its effect list is the controller's: `Show1` and `Show2` play the shows stored on the controller; the rest (`Test`,
   `Bands`, `Glow`, ...) are its built-in patterns. Brightness maps to the controller's intensity (0-100%).
@@ -67,35 +74,60 @@ device existed keeps its entity ID, for example `light.ndbpro_scenes`.)
   `colors` and `background` attributes show the palette as the controller reports it (`[0, 0, 0]` is an empty slot).
   `cool_white` and `warm_white` select the controller's white LEDs (it maps `#feffff` to cool white and pure white to
   warm white); an empty list clears the palette, so the controller picks random colors. Setting colors does not turn
-  the Scenes light on or take the pixels from a DDP light, and it is not saved to the controller's flash.
+  the controller light on or take the pixels from a DDP light, and it is not saved to the controller's flash.
+- **Color 1** to **Color 5** set one palette slot each, read back by the same 30 s poll. A color sets the slot to it
+  (scaled by a brightness); the effect `Cool White` or `Warm White` sets the controller's white value (`#feffff` or
+  `#ffffff`); off empties the slot (`#000000`). A slot that reads back as one of the whites shows that effect (the
+  controller reports Warm White as `#c69740` once set, and pure white `#ffffff` is Warm White too); any other color
+  shows as the color. A bare turn_on of an empty slot brings back its last color, also after a restart, white by
+  default. Like `ddp.set_colors`, a slot change leaves DDP alone.
 
 **Segment lights vs. scenes.** DDP data overrides the controller's built-in effect immediately, and about 20 s after DDP
-stops the controller falls back to it. So the two kinds of light take turns:
+stops on its pixels the controller falls back to it. Each DDP light (the outputs and All outputs) shows what lights its
+pixels:
 
-- Turning on a scene (or recalling a preset) first turns every DDP light (the outputs and All outputs) off without
-  sending black and stops DDP, so the scene shows at once.
-- Turning a segment light on takes the pixels over again. While any segment light is on, the keepalive (default 1 s)
-  keeps re-sending its frame so the controller does not fall back mid-color; with keepalive 0 a solid color reverts to
-  the built-in effect after about 20 s.
-- When the last segment light turns off, DDP stops; about 20 s later the controller's own scene (or `Off`) is back.
+- Turning on a scene (the controller light, Power, or Scene, or recalling a preset) stops DDP without sending black and shows every DDP light on: they show
+  the scene. A scene started from the controller's own UI does the same once the 30 s poll sees it.
+- Turning a DDP light off while a scene runs disables that output: black is sent for its pixels only and kept up by the
+  keepalive, and the scene keeps running on the other outputs. All outputs off blanks the whole strip and shows every
+  output off.
+- A bare `light.turn_on` (no brightness, color, or effect) of a disabled light hands its pixels back to the scene:
+  nothing is sent and the keepalive stops for them, and the controller resumes the scene there after its DDP timeout,
+  about 20 s later. A bare turn_on of All outputs brings back every output; brought back one at a time, All outputs
+  shows on again once no output is disabled.
+- Turning a DDP light on with a brightness, color, effect, or pattern takes its pixels over DDP again; a light that
+  shares those pixels (All outputs for an output, the outputs for All outputs) shows off, and the others keep showing
+  the scene. While a light holds pixels, the keepalive (default 1 s) keeps re-sending them so the
+  controller does not fall back mid-color; with keepalive 0 a solid color reverts to the built-in effect after about
+  20 s.
+- Turning the controller light (or Power) off turns every DDP light off. When the poll sees the controller turned `Off` elsewhere,
+  the lights that showed or disabled the scene go off; lights driven over DDP keep running.
+- With no scene running, an off output stays black (held by the keepalive) while another DDP light is on; when the
+  last DDP light turns off, DDP stops; about 20 s later the controller's own effect
+  (or `Off`) is back.
+- After a Home Assistant restart a disabled output is not restored (no black is sent, so the scene comes back on it),
+  and a light that showed the scene is not re-sent; with a scene running, the idle DDP lights show it again.
+
+Not verified on hardware yet: whether the NDB-Pro keeps its effect running on outputs DDP is not writing to. If it does
+not, disabling one output freezes the scene on the others.
 
 ## Actions
 
 | Action | Target | Fields |
 |---|---|---|
 | `ddp.set_pattern` | An output light or All outputs | `colors` (required: 1-16 colors, each `[r, g, b]` 0-255, or `[r, g, b, w]` on an RGBW entry with `palette`), `block_size` (pixels per color block, default 1; palette only), `effect` (`palette` by default, or `chase`, `breathe`, `twinkle`), `params` (the effect's other parameters, for example `{"speed": 4}`), `brightness` (1-255) |
-| `ddp.recall_preset` | A Scenes light | `preset` (1-20; 1-10 are slots of Show 1, 11-20 of Show 2) |
-| `ddp.set_colors` | A Scenes light | `colors` (required: 0-5 colors for palette slots 1-5, each `[r, g, b]` 0-255 or `cool_white` / `warm_white`; the remaining slots are emptied, and an empty list lets the controller pick random colors), `background` (`[r, g, b]`; left as it is when omitted) |
-| `light.turn_on` / `light.turn_off` | Any light of this integration | Segment lights: `brightness`, `rgb_color` (`rgbw_color` on an RGBW entry), `effect`. Scenes light: `brightness`, `effect` |
+| `ddp.recall_preset` | A controller light | `preset` (1-20; 1-10 are slots of Show 1, 11-20 of Show 2) |
+| `ddp.set_colors` | A controller light | `colors` (required: 0-5 colors for palette slots 1-5, each `[r, g, b]` 0-255 or `cool_white` / `warm_white`; the remaining slots are emptied, and an empty list lets the controller pick random colors), `background` (`[r, g, b]`; left as it is when omitted) |
+| `light.turn_on` / `light.turn_off` | Any light of this integration | Segment lights: `brightness`, `rgb_color` (`rgbw_color` on an RGBW entry), `effect`. Controller light: `brightness`, `effect`. Color 1-5: `rgb_color`, `brightness` (scales the color), `effect` (`Cool White`, `Warm White`) |
 
-`ddp.set_pattern` on the Scenes light, and `ddp.recall_preset` or `ddp.set_colors` on a segment light, are refused.
+`ddp.set_pattern` on a controller device light, and `ddp.recall_preset` or `ddp.set_colors` on any light but the controller light, are refused.
 Recalling a preset overwrites the controller's current colors with the preset's. Actions raise an error when a send
 fails, the effect is unknown or takes no colors, a pattern parameter is invalid, a pattern color has a white value the
 entry or effect cannot show, or the controller does not answer.
 
 ## Examples: scenes on a schedule
 
-Schedule the controller's stored scenes with plain automations against the Scenes light:
+Schedule the controller's stored scenes with plain automations against the controller light:
 
 ```yaml
 automation:
@@ -107,7 +139,7 @@ automation:
     actions:
       - action: light.turn_on
         target:
-          entity_id: light.ndbpro_minleon_ndb_pro_scenes
+          entity_id: light.ndbpro_minleon_ndb_pro
         data:
           effect: Show1
           brightness_pct: 80
@@ -122,7 +154,7 @@ automation:
     actions:
       - action: ddp.recall_preset
         target:
-          entity_id: light.ndbpro_minleon_ndb_pro_scenes
+          entity_id: light.ndbpro_minleon_ndb_pro
         data:
           preset: 3
 
@@ -133,10 +165,10 @@ automation:
     actions:
       - action: light.turn_off
         target:
-          entity_id: light.ndbpro_minleon_ndb_pro_scenes
+          entity_id: light.ndbpro_minleon_ndb_pro
 ```
 
-Turning the Scenes light off blanks the DDP segment lights too, so the 23:00 automation is all you need for "off".
+Turning the controller light off blanks the DDP segment lights too, so the 23:00 automation is all you need for "off".
 
 Home Assistant scenes still work for the DDP segment lights; a scene captures each light's state (on/off, brightness,
 color, effect):
@@ -167,12 +199,12 @@ The controller's Fixed Colors effect in warm white and red, every other color (s
 ```yaml
 - action: ddp.set_colors
   target:
-    entity_id: light.ndbpro_minleon_ndb_pro_scenes
+    entity_id: light.ndbpro_minleon_ndb_pro
   data:
     colors: ["warm_white", [255, 0, 0], "warm_white", [255, 0, 0]]
 - action: light.turn_on
   target:
-    entity_id: light.ndbpro_minleon_ndb_pro_scenes
+    entity_id: light.ndbpro_minleon_ndb_pro
   data:
     effect: Fixed Colors
 ```
@@ -182,7 +214,7 @@ Clear the palette so the controller picks random colors:
 ```yaml
 action: ddp.set_colors
 target:
-  entity_id: light.ndbpro_minleon_ndb_pro_scenes
+  entity_id: light.ndbpro_minleon_ndb_pro
 data:
   colors: []
 ```

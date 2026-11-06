@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from itertools import permutations
 from typing import Final
 
@@ -14,7 +15,7 @@ CONF_SEGMENTS: Final = "segments"
 CONF_MANUFACTURER: Final = "manufacturer"
 CONF_MODEL: Final = "model"
 CONF_FIRMWARE: Final = "firmware"
-CONF_CONTROLLER_TYPE: Final = "controller_type"  # key into controller.CONTROLLER_TYPES; vendor types get a Scenes light
+CONF_CONTROLLER_TYPE: Final = "controller_type"  # key into controller.CONTROLLER_TYPES; vendor types add a device
 CONF_HTTP_PORT: Final = "http_port"  # test-only, like "port": where the controller's HTTP UI listens
 DEFAULT_HTTP_PORT: Final = 80
 # Segment dict keys: "key" is the stable aioddp segment name used in unique IDs, "name" is for display.
@@ -49,6 +50,18 @@ DEFAULT_COLOR_ORDER: Final = {DATA_TYPE_RGB: "RGB", DATA_TYPE_RGBW: "RGBW"}
 # Effect name aioddp renders for a plain solid color; hidden from the effect list (HA's EFFECT_OFF means solid).
 SOLID_EFFECT: Final = "solid"
 
+
+class LightSource(StrEnum):
+    """What lights a DDP light's pixels: nothing, HA over DDP, the controller's running scene, or HA's held black
+    over a running scene (the light was turned off while the scene runs). The light is on for ``ddp`` and ``scene``.
+    """
+
+    OFF = "off"
+    DDP = "ddp"
+    SCENE = "scene"
+    BLANKED = "blanked"
+
+
 # Unique-ID suffix of the "All outputs" light, which spans the whole strip (entries with more than one segment).
 STRIP_KEY: Final = "strip"
 
@@ -61,13 +74,16 @@ MAX_PATTERN_COLORS: Final = 16
 ATTR_COLORS: Final = "colors"
 ATTR_BLOCK_SIZE: Final = "block_size"
 ATTR_PARAMS: Final = "params"
-SERVICE_SET_COLORS: Final = "set_colors"  # the controller's palette, on the Scenes light
+SERVICE_SET_COLORS: Final = "set_colors"  # the controller's palette, on the controller light
 ATTR_BACKGROUND: Final = "background"
 # set_colors names for the controller's own whites (exact RGB values the vendor maps to its white LEDs)
 COLOR_COOL_WHITE: Final = "cool_white"
 COLOR_WARM_WHITE: Final = "warm_white"
 
-# Device identifier suffix of a vendor controller's own device (Scenes light), next to the DDP device's bare host.
+# The controller's built-in effect that blanks the lights: the controller device's off, not an effect.
+CONTROLLER_OFF: Final = "Off"
+
+# Device identifier suffix of a vendor controller's own device (its entities), next to the DDP device's bare host.
 CONTROLLER_DEVICE_SUFFIX: Final = ":controller"
 
 type RGB = tuple[int, int, int]

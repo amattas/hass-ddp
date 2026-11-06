@@ -3,7 +3,7 @@
 ## Prerequisites
 
 - Home Assistant 2026.10.0 or later.
-- The controller reachable from Home Assistant over UDP port 4048 and, for the Scenes light, TCP port 80.
+- The controller reachable from Home Assistant over UDP port 4048 and, for the controller device's entities, TCP port 80.
 - `git` available to Home Assistant: the two libraries are installed from pinned git commits (`aioddp` is not yet
   published to PyPI).
 
@@ -51,7 +51,7 @@ loses its light (and with a single output left, All outputs goes too). A color o
 pixel type is reset to the default. When the controller reports no layout, the stored one is kept.
 
 The entry reloads and keeps its devices, entities, and history. Choosing Generic DDP removes the controller device and
-its Scenes light.
+its entities.
 
 ## Removal
 
