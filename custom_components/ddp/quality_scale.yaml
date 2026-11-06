@@ -104,7 +104,8 @@ rules:
   entity-unavailable:
     status: done
     comment: |
-      The controller device's entities are CoordinatorEntities and become unavailable when the controller does not answer. Segment
+      The controller device's entities are CoordinatorEntities and become unavailable only when the controller does not answer
+      (Color N holding a white stays available, in color-temperature mode). Segment
       lights stay available on purpose: DDP is send-only with no reachability signal, their state is assumed, and a
       failed send raises an error in the action instead.
   integration-owner:

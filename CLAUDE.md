@@ -45,7 +45,7 @@ one registry entry). See `DECISIONS.md`.
   aioddp effects, `ddp.set_pattern` (kept in restore state); a `source` of `off`/`ddp`/`scene`/`blanked` (see
   DECISIONS.md 2026-11-06); `AllOutputsLight` over the whole strip when there is more than one segment (DDP lights
   that share pixels hand them to each other without sending); `PaletteLight` "Color 1".."Color 5", one palette slot
-  each: RGB while its Mode is Color, on/off while it is a white. Setup removes any light of the entry it did not create
+  each: RGB, or color temperature (2700 K warm, 6500 K cool) while it holds a white. Setup removes any light of the entry it did not create
 - `switch.py`: `PowerSwitch`, the controller device's main entity (no name): on = a scene runs, off = the controller's
   Off; `colors`/`background` attributes, `last_effect` restore, `ddp.recall_preset`, `ddp.set_colors`.
   `select.py`: `SceneSelect` (the controller's effects without Off) and `ModeSelect` 1-5. `number.py`:
