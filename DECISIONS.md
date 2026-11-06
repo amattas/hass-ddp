@@ -63,8 +63,9 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
 - Implementation notes (2026-11-06): ownership hand-over applies to `ddp` lights only (a `scene` or `blanked` light
   keeps its source when another light takes pixels over DDP). A poll runs the DDP-light changes under the
   coordinator's lock before it publishes (`DDPScenesCoordinator.on_poll`, set by the Scenes light), so commands never
-  trigger them; "scene start" is a change to a different non-Off effect. A first read after an unreachable start (or
-  setup) only moves idle lights (off, no overlapping `ddp` light) to `scene`, since DDP may have been overriding that
-  effect all along. Restore stores the source: a light that was on showing a scene is not re-sent. All outputs is
+  trigger them; "scene start" (a change to a different non-Off effect) takes `off` and `ddp` lights. Every other poll
+  of a running scene moves the `off` lights that hold no range to `scene` (released, so the controller lights them
+  again ~20 s later) and never touches `ddp` lights, since DDP may be overriding that effect. Setup moves only idle
+  lights (off, no overlapping `ddp` light). Restore stores the source: a light that was on showing a scene is not re-sent. All outputs is
   blanked only while an output it covers is; its outputs hold their own black, so un-blanking one releases just that
   output. With no scene running an off light still keeps its black held while another light is `ddp`.

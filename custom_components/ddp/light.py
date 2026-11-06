@@ -665,22 +665,22 @@ class ScenesLight(CoordinatorEntity[DDPScenesCoordinator], DDPEntity, LightEntit
     async def _follow_poll(self, previous: SceneState | None, state: SceneState) -> None:
         """Show on the DDP lights a scene started or stopped outside HA (the controller's own UI or schedule).
 
-        A new scene takes every ``off`` and ``ddp`` light (blanked ones keep their black); "Off" turns the lights
-        showing or blanking a scene off and leaves ``ddp`` lights running. The first read after an unreachable
-        start only shows the scene on idle lights, since DDP may have been overriding it all along.
+        A new scene takes every ``off`` and ``ddp`` light (blanked ones keep their black). Any poll of a running scene
+        also shows it on every ``off`` light that holds no pixels (released, so the controller lights them again);
+        ``ddp`` lights are then left alone, since DDP may be overriding that scene. "Off" turns the lights showing or
+        blanking a scene off and leaves ``ddp`` lights running.
         """
+        if state.effect is None:
+            return
         before = previous.effect if previous is not None else None
         lights = self._runtime.segment_lights
-        if state.effect is None or (state.effect == before and state.effect != CONTROLLER_OFF):
-            return
-        sources: tuple[LightSource, ...]
+        sources: tuple[LightSource, ...] = (LightSource.OFF, LightSource.DDP)
+        target = LightSource.SCENE
         if state.effect == CONTROLLER_OFF:
             sources, target = (LightSource.SCENE, LightSource.BLANKED), LightSource.OFF
-        elif before is None:
-            lights = [light for light in lights if light.idle]
-            sources, target = (LightSource.OFF,), LightSource.SCENE
-        else:
-            sources, target = (LightSource.OFF, LightSource.DDP), LightSource.SCENE
+        elif before is None or before == state.effect:
+            # Decided before any light changes: one light showing the scene would make the others stop holding.
+            lights = [light for light in lights if light.source is LightSource.OFF and not light.holding]
         changed = [await light.async_follow_scene(target, sources) for light in lights]
         if any(changed):
             self._runtime.release_unheld()

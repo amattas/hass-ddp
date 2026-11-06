@@ -419,6 +419,23 @@ async def test_an_output_turned_off_during_a_scene_holds_black_on_its_pixels_onl
     assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_ON] * 3
     assert sender.stats.frames_sent == 0
 
+    # Both outputs taken over DDP (All outputs hands them its pixels): a poll of the same scene leaves them on DDP.
+    for entity_id in DDP_LIGHTS[::-1]:
+        await _call(hass, SERVICE_TURN_ON, entity_id, rgb_color=(255, 0, 0))
+    await _poll(fast_keepalive_entry)
+    assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_ON, STATE_ON, STATE_OFF]
+    assert await _keepalive_ranges(udp_listener) == {(0, 122 * 3)}
+    # Both off with no light showing the scene: released, so the controller's scene comes back; the next poll of the
+    # same scene shows it on every DDP light, sending nothing.
+    await _call(hass, SERVICE_TURN_OFF, OUT1)
+    await _call(hass, SERVICE_TURN_OFF, OUT2)
+    assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_OFF] * 3
+    frames = sender.stats.frames_sent
+    await _poll(fast_keepalive_entry)
+    assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_ON] * 3
+    assert sender.stats.frames_sent == frames
+    assert await _keepalive_ranges(udp_listener) == set()
+
     # Off during a scene: black for Output 2 only, held by keepalive; Output 1 keeps showing the scene.
     await _call(hass, SERVICE_TURN_OFF, OUT2)
     packet = await udp_listener.wait_for(lambda p: p.offset == OUT2_OFFSET)
@@ -429,7 +446,7 @@ async def test_an_output_turned_off_during_a_scene_holds_black_on_its_pixels_onl
 
     # A bare turn_on hands the pixels back to the scene: nothing sent, nothing held.
     await _call(hass, SERVICE_TURN_ON, OUT2)
-    assert sender.stats.frames_sent == 1
+    assert sender.stats.frames_sent == frames + 1
     assert _state(hass, OUT2).state == STATE_ON
     assert await _keepalive_ranges(udp_listener) == set()
 
