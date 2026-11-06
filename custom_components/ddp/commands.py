@@ -20,7 +20,14 @@ from aioddp import DDPError
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from .const import COLOR_COOL_WHITE, COLOR_WARM_WHITE, CONTROLLER_OFF, DOMAIN, RGB, LightSource
-from .controller import CONTROLLER_ERRORS, EMPTY_COLOR, NAMED_COLORS, PALETTE_SLOTS, WARM_WHITE_SHOWN
+from .controller import (
+    CONTROLLER_ERRORS,
+    DEFAULT_CUSTOM_COLOR,
+    EMPTY_COLOR,
+    NAMED_COLORS,
+    PALETTE_SLOTS,
+    WARM_WHITE_SHOWN,
+)
 from .coordinator import DDPScenesCoordinator, SceneState
 
 if TYPE_CHECKING:
@@ -158,6 +165,25 @@ class ControllerCommands:
             if data is None or len(data.colors) != PALETTE_SLOTS:
                 await self.coordinator.async_read_after_command()
                 return
+            colors = list(data.colors)
+            colors[slot - 1] = color
+            self._publish(colors=tuple(colors))
+
+    async def restore_custom(self, entity_id: str | None, slot: int) -> None:
+        """Mode = Color: if palette ``slot`` holds a white *now*, re-send its last custom color (default red).
+
+        Decided under the coordinator lock from the current palette, so a concurrent Color N command (an HA scene
+        applies both at once) is never overwritten by a stale snapshot.
+        """
+        async with self.coordinator.lock:
+            data = self.coordinator.data
+            if data is None or len(data.colors) < slot or slot_mode(data.colors[slot - 1]) not in MODE_WHITES:
+                return
+            color = self.coordinator.last_custom.get(slot, DEFAULT_CUSTOM_COLOR)
+            try:
+                await self.coordinator.controller.set_color(slot, color)
+            except CONTROLLER_ERRORS as err:
+                raise controller_error(entity_id, err) from err
             colors = list(data.colors)
             colors[slot - 1] = color
             self._publish(colors=tuple(colors))

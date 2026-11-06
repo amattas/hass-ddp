@@ -39,6 +39,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity import EntityCategory
+from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 from pyminleon import ControllerError
 from pytest_homeassistant_custom_component.common import (
@@ -1024,3 +1025,37 @@ async def test_http_layout_and_detection_of_an_unusable_controller(fake_controll
     fake_controller.offline = True
     assert await fetch_layout("ndbpro", host, fake_controller.port) is None
     assert await detect(host, fake_controller.port) == "generic"
+
+
+@pytest.mark.parametrize("how", ["gather", "scene"])
+async def test_concurrent_mode_color_never_overwrites_color(
+    hass: HomeAssistant,
+    fake_controller: FakeController,
+    entry_factory: Callable[..., MockConfigEntry],
+    how: str,
+) -> None:
+    """Color 2 (rgb X) and Mode 2 (color) applied together, the light first (as an HA scene does): the select
+    decides from the palette under the lock, so its stale last custom color never wins."""
+    assert await async_setup_component(hass, "scene", {})
+    entry = entry_factory(controller=fake_controller)
+    await _setup(hass, entry)
+    await _call(hass, SERVICE_TURN_ON, COLORS[1], rgb_color=(0, 255, 0))  # the stale last custom color
+    await _call(hass, SERVICE_TURN_ON, COLORS[1], color_temp_kelvin=6500)
+    fake_controller.requests.clear()
+    target = (0x12, 0x34, 0x56)
+    if how == "gather":
+        await asyncio.gather(
+            _call(hass, SERVICE_TURN_ON, COLORS[1], rgb_color=target),
+            _call(hass, "select_option", MODES[1], domain="select", option="color"),
+        )
+    else:
+        entities = {
+            COLORS[1]: {"state": STATE_ON, "color_mode": ColorMode.RGB, "rgb_color": target},
+            MODES[1]: {"state": "color"},
+        }
+        await hass.services.async_call("scene", "apply", {"entities": entities}, blocking=True)
+        await hass.async_block_till_done()
+    await _poll(entry)
+    assert list(_state(hass, COLORS[1]).attributes[ATTR_RGB_COLOR]) == list(target)
+    assert fake_controller.commands()[-1] == _color(2, "#123456")
+    assert await hass.config_entries.async_unload(entry.entry_id)

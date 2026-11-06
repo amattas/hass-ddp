@@ -9,7 +9,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import DDPConfigEntry
 from .commands import MODE_WHITES, SLOT_MODES, ControllerCommands, slot_mode
-from .controller import DEFAULT_CUSTOM_COLOR, PALETTE_SLOTS
+from .controller import PALETTE_SLOTS
 from .entity import ControllerEntity, controller_device_parent
 
 # Commands serialize on the coordinator lock.
@@ -72,6 +72,5 @@ class ModeSelect(ControllerEntity, SelectEntity):
     async def async_select_option(self, option: str) -> None:
         if option in MODE_WHITES:
             await self._commands.set_color(self.entity_id, self._slot, MODE_WHITES[option])
-        elif self.current_option in MODE_WHITES:  # an HA scene restoring Mode then Color never sees a cleared slot
-            last = self.coordinator.last_custom.get(self._slot, DEFAULT_CUSTOM_COLOR)
-            await self._commands.set_color(self.entity_id, self._slot, last)
+        else:  # decided under the coordinator lock, from the current palette
+            await self._commands.restore_custom(self.entity_id, self._slot)

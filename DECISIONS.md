@@ -132,6 +132,7 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
 - Follow-up (0.4.1): Color N supports RGB and color temperature (2700-6500 K) instead of turning into an on/off
   light: a white slot reports color temp (Warm White 2700 K, Cool White 6500 K), a custom color RGB, black off; a
   temperature turn_on sends Warm White up to 4600 K, else Cool White, exact. Selecting Mode = Color re-sends the slot's last custom color (default red) instead of clearing it,
-  so an HA scene that restores Mode and Color together cannot race a cleared slot. Presets are HA scenes: they
+  so an HA scene that restores Mode and Color together cannot race a cleared slot; that decision is taken under the
+  coordinator lock from the current palette, so a concurrent Color N command is never overwritten by a stale snapshot. Presets are HA scenes: they
   capture Power, Scene, Mode/Color 1-5, Intensity and the DDP lights; the NDB-Pro's 20 stored presets stay
   recall-only (pyminleon never writes saved settings).
