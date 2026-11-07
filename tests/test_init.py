@@ -49,13 +49,10 @@ async def test_migrate_v1_entry(
     )
     entry.add_to_hass(hass)
     registry = er.async_get(hass)
-    # The Scenes light (later the controller light) an older NDB-Pro entry had: gone since the Power switch took its
-    # place, so setup removes it like any other stale entity.
+    # The controller light an older NDB-Pro entry had (the unique ID is reused by the main light of a vendor type);
+    # a Generic DDP entry has no controller device, so setup removes it like any other stale entity.
     scenes_unique_id = f"{entry.entry_id}_controller"
-    if controller_type == "ndbpro":
-        registry.async_get_or_create(
-            "light", DOMAIN, scenes_unique_id, config_entry=entry, suggested_object_id="legacy_scenes"
-        )
+    registry.async_get_or_create("light", DOMAIN, scenes_unique_id, config_entry=entry, suggested_object_id="legacy")
 
     await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -65,7 +62,9 @@ async def test_migrate_v1_entry(
     if controller_type is not None:
         assert entry.version == 2
         assert (entry.runtime_data.controller is not None) == (controller_type == "ndbpro")
-        assert registry.async_get_entity_id("light", DOMAIN, scenes_unique_id) is None
+        assert (registry.async_get_entity_id("light", DOMAIN, scenes_unique_id) is not None) == (
+            controller_type == "ndbpro"
+        )
         assert await hass.config_entries.async_unload(entry.entry_id)
 
 

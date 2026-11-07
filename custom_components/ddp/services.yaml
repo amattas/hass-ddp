@@ -2,7 +2,7 @@ recall_preset:
   target:
     entity:
       integration: ddp
-      domain: switch
+      domain: light
   fields:
     preset:
       required: true
@@ -58,7 +58,7 @@ set_colors:
   target:
     entity:
       integration: ddp
-      domain: switch
+      domain: light
   fields:
     colors:
       required: true

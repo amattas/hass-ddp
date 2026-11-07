@@ -11,11 +11,11 @@ import probatio
 from aioddp import DDP_PORT, DataType, DDPSender, DDPSendError, EffectRunner, Segment, Strip
 from homeassistant.components.light.const import ATTR_BRIGHTNESS, ATTR_EFFECT
 from homeassistant.components.light.const import DOMAIN as LIGHT_DOMAIN
-from homeassistant.components.switch.const import DOMAIN as SWITCH_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import service
 from homeassistant.helpers.typing import ConfigType
 
@@ -59,7 +59,7 @@ from .coordinator import DDPScenesCoordinator
 if TYPE_CHECKING:
     from .light import DDPSegmentLight
 
-PLATFORMS: list[Platform] = [Platform.LIGHT, Platform.NUMBER, Platform.SELECT, Platform.SWITCH]
+PLATFORMS: list[Platform] = [Platform.LIGHT, Platform.SELECT]
 CONFIG_VERSION = 2  # the config flow's VERSION
 _HELD = "held"  # name of the pixel ranges ``sync_holds`` builds; aioddp segments need one
 
@@ -195,12 +195,12 @@ def build_strip(entry: DDPConfigEntry) -> Strip:
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Register the integration's actions once, so they exist whether or not an entry is loaded. The controller's
-    actions take the Power switch (the only switch), ``set_pattern`` the DDP lights."""
+    actions take the controller light, ``set_pattern`` the DDP lights."""
     service.async_register_platform_entity_service(
         hass,
         DOMAIN,
         SERVICE_RECALL_PRESET,
-        entity_domain=SWITCH_DOMAIN,
+        entity_domain=LIGHT_DOMAIN,
         schema={
             probatio.Required("preset"): probatio.All(probatio.Coerce(int), probatio.Range(min=1, max=PRESET_COUNT))
         },
@@ -226,7 +226,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         hass,
         DOMAIN,
         SERVICE_SET_COLORS,
-        entity_domain=SWITCH_DOMAIN,
+        entity_domain=LIGHT_DOMAIN,
         schema={
             probatio.Required(ATTR_COLORS): probatio.All([_PALETTE_COLOR], probatio.Length(max=PALETTE_SLOTS)),
             probatio.Optional(ATTR_BACKGROUND): _RGB,
@@ -267,8 +267,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
         # Polls reach the DDP lights through the commands, whichever controller entities are enabled.
         scenes.on_poll = runtime.commands.follow_poll
         entry.async_on_unload(_stop_following(scenes))
+    _remove_stale_entities(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
+
+
+def _remove_stale_entities(hass: HomeAssistant, entry: DDPConfigEntry) -> None:
+    """Drop the Power switch and Intensity number of 0.4.0/0.4.1: their platforms are gone, so no platform setup
+    can prune them."""
+    registry = er.async_get(hass)
+    for registered in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if registered.domain in (Platform.SWITCH, Platform.NUMBER):
+            registry.async_remove(registered.entity_id)
 
 
 def _stop_following(scenes: DDPScenesCoordinator) -> Callable[[], None]:

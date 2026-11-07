@@ -1,5 +1,4 @@
-"""Commands to a vendor controller, shared by the controller device's entities (Power, Scene, Color 1-5,
-Intensity).
+"""Commands to a vendor controller, shared by the controller device's entities (main light, Scene, Color 1-5).
 
 Every command runs under the coordinator's lock (so a stale poll cannot undo it) and publishes what it changed. A
 command that starts a scene hands the pixels back from DDP once the controller took it: every DDP light shows the

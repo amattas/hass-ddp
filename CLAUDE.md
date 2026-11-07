@@ -19,7 +19,7 @@ one registry entry). See `DECISIONS.md`.
 ## Layout
 
 - `__init__.py`: `async_setup` registers the entity services: `ddp.set_pattern` (light domain, the DDP lights) and
-  `ddp.recall_preset` / `ddp.set_colors` (switch domain, the Power switch); `DDPRuntime` (`entry.runtime_data`): one
+  `ddp.recall_preset` / `ddp.set_colors` (light domain, the controller light); `DDPRuntime` (`entry.runtime_data`): one
   `Strip`, one open `DDPSender`, segments, fps, runners, `sync_holds()` (the byte ranges keepalive resends follow the
   DDP lights' state, read from `DDPSender.held`), the `Controller` built from the entry's stored `controller_type`
   (`None` for Generic), its `DDPScenesCoordinator` and `ControllerCommands`; `async_migrate_entry` (1 -> 2).
@@ -35,7 +35,7 @@ one registry entry). See `DECISIONS.md`.
   and controller documents
 - `entity.py`: `DDPEntity` base (unique IDs). Two devices per vendor entry: the DDP device `(DOMAIN, host)`, named
   "<title> Generic DDP" (the title alone for Generic), and the controller device `(DOMAIN, host:controller)`, linked
-  by `via_device_id`, for Power, Color 1-5, Scene and Intensity; `ControllerEntity` is their coordinator-entity
+  by `via_device_id`, for the controller light, Color 1-5 and Scene; `ControllerEntity` is their coordinator-entity
   base. `DeviceInfo` is built in one call (since HA 2026.11 it is not a dict)
 - `controller.py`: controller type registry, `Controller` protocol, `detect`, `create_controller`, `fetch_layout`
 - `config_flow.py`: host -> `aioddp.discover` + `detect` -> controller type step (detected preselected, Generic always
@@ -46,10 +46,9 @@ one registry entry). See `DECISIONS.md`.
   DECISIONS.md 2026-11-06); `AllOutputsLight` over the whole strip when there is more than one segment (DDP lights
   that share pixels hand them to each other without sending); `PaletteLight` "Color 1".."Color 5", one palette slot
   each: RGB, or color temperature (2700 K warm, 6500 K cool) while it holds a white. Setup removes any light of the entry it did not create
-- `switch.py`: `PowerSwitch`, the controller device's main entity (no name): on = a scene runs, off = the controller's
+- `light.py` also has `ControllerLight`, the controller device's main entity (no name; brightness = intensity): on = a scene runs, off = the controller's
   Off; `colors`/`background` attributes, `last_effect` restore, `ddp.recall_preset`, `ddp.set_colors`.
-  `select.py`: `SceneSelect` (the controller's effects without Off). `number.py`:
-  `IntensityNumber` (percent, config category)
+  `select.py`: `SceneSelect` (the controller's effects without Off).
 - Design spec: `docs/superpowers/specs/2026-10-28-hass-ddp-design.md` (this release is a smaller cut of it)
 
 ## Rules
