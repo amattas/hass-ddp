@@ -38,6 +38,7 @@ from homeassistant.core import HomeAssistant, State
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.util import color as color_util
 from homeassistant.util import dt as dt_util
 from pyminleon import ControllerError
 from pytest_homeassistant_custom_component.common import (
@@ -330,6 +331,12 @@ def _light(service: str, **data: Any) -> tuple[str, str, int, dict[str, Any]]:
     return (LIGHT_DOMAIN, service, 1, data)
 
 
+def _kelvin_hex(kelvin: int, brightness: int = 255) -> str:
+    """HA's RGB for ``kelvin`` at ``brightness``, as the slot's hex."""
+    rgb = [round(round(value) * brightness / 255) for value in color_util.color_temperature_to_rgb(kelvin)]
+    return "#" + "".join(f"{value:02x}" for value in rgb)
+
+
 @pytest.mark.parametrize(
     ("shown", "restored", "commands", "sent", "state", "mode"),
     [
@@ -349,18 +356,20 @@ def _light(service: str, **data: Any) -> tuple[str, str, int, dict[str, Any]]:
         # The restored last color can be a white: it comes back.
         ("#000000", {"last_color": [254, 255, 255]}, [_light(SERVICE_TURN_ON)], ["#feffff"], STATE_ON, "cool_white"),
         ("#000000", None, [_light(SERVICE_TURN_ON)], ["#ff0000"], STATE_ON, "color"),  # none: red (white is a mode)
-        # A temperature picks a white (up to 4600 K warm, above cool), sent exact; any brightness is ignored.
+        # A temperature: the ends are the controller's whites, sent exact; in between HA's kelvin -> RGB, scaled by a
+        # brightness, which reads back as a color.
         ("#000000", None, [_light(SERVICE_TURN_ON, color_temp_kelvin=2700)], ["#ffffff"], STATE_ON, "warm_white"),
-        ("#123456", None, [_light(SERVICE_TURN_ON, color_temp_kelvin=4600)], ["#ffffff"], STATE_ON, "warm_white"),
+        ("#123456", None, [_light(SERVICE_TURN_ON, color_temp_kelvin=4000)], [_kelvin_hex(4000)], STATE_ON, "color"),
         (
             "#000000",
             None,
-            [_light(SERVICE_TURN_ON, color_temp_kelvin=4601, brightness=128)],
-            ["#feffff"],
+            [_light(SERVICE_TURN_ON, color_temp_kelvin=4000, brightness=128)],
+            [_kelvin_hex(4000, 128)],
             STATE_ON,
-            "cool_white",
+            "color",
         ),
         ("#c69740", None, [_light(SERVICE_TURN_ON, color_temp_kelvin=6500)], ["#feffff"], STATE_ON, "cool_white"),
+        ("#000000", None, [_light(SERVICE_TURN_ON, color_temp_kelvin=9000)], ["#feffff"], STATE_ON, "cool_white"),
         # On a white: bare re-sends the white exact (brightness too), a color leaves it, off clears the slot.
         ("#c69740", None, [_light(SERVICE_TURN_ON)], ["#ffffff"], STATE_ON, "warm_white"),
         ("#feffff", None, [_light(SERVICE_TURN_ON, brightness=51)], ["#feffff"], STATE_ON, "cool_white"),
@@ -385,9 +394,10 @@ def _light(service: str, **data: Any) -> tuple[str, str, int, dict[str, Any]]:
         "bare-restored-white",
         "bare-default",
         "kelvin-2700",
-        "kelvin-4600",
-        "kelvin-4601-brightness",
+        "kelvin-4000",
+        "kelvin-4000-brightness",
         "kelvin-6500",
+        "kelvin-past-max",
         "white-bare",
         "white-brightness",
         "white-rgb",

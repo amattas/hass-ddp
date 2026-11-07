@@ -21,7 +21,8 @@ data overrides those while it flows, so once the controller took the command eve
 (sending nothing) and the sender is released (``ControllerCommands``). A poll that finds a scene started or stopped
 outside HA does the same. "Color 1".."Color 5" set one slot each of the palette those effects use, which leaves DDP
 alone (``ddp.set_colors`` on the controller light sets them all);
-a Color tab sets a custom color, a Temperature tab one of the whites.
+a Color tab sets a custom color, a Temperature tab a white: the controller's own at either end, HA's kelvin -> RGB in
+between (the controller converts RGB to its pixels itself).
 """
 
 from __future__ import annotations
@@ -52,6 +53,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoredExtraData, RestoreEntity
+from homeassistant.util import color as color_util
 
 from . import DDPConfigEntry, DDPRuntime, SegmentConfig
 from .commands import MODE_COLOR, MODE_WHITES, ControllerCommands, slot_mode
@@ -96,10 +98,10 @@ CONTROLLER_KEY = "controller"  # unique-ID suffix of the controller light (the p
 ATTR_LAST_EFFECT = "last_effect"  # restore data: the last scene, for a bare turn_on after a restart
 COLOR_KEY = "color"  # unique-ID suffix of a palette slot light, with its slot: color_1 .. color_5
 ATTR_LAST_COLOR = "last_color"  # restore data: a palette slot's last color, for a bare turn_on of an empty slot
-# A palette light's Temperature tab: the controller's two whites, warm up to the split, cool above it.
+# A palette light's Temperature tab: the controller's warm white at the low end, its cool white at the high end, HA's
+# kelvin -> RGB in between (no in-range kelvin, at any brightness, gives a value that reads back as a white).
 WARM_WHITE_KELVIN = 2700
 COOL_WHITE_KELVIN = 6500
-WHITE_SPLIT_KELVIN = 4600
 WHITE_KELVINS: dict[str, int] = {COLOR_WARM_WHITE: WARM_WHITE_KELVIN, COLOR_COOL_WHITE: COOL_WHITE_KELVIN}
 COLORS_KIND = "colors"  # aioddp ParamSpec kind of a color-list param
 
@@ -719,7 +721,8 @@ class ControllerLight(ControllerEntity, LightEntity, RestoreEntity):
 
 class PaletteLight(ControllerEntity, LightEntity, RestoreEntity):
     """One slot of the controller's palette ("Color 1".."Color 5"); off is an empty slot. A Color tab sets a custom
-    color; a Temperature tab sets one of the controller's whites (warm 2700 K, cool 6500 K)."""
+    color; a Temperature tab sets the controller's warm white at 2700 K, its cool white at 6500 K, and HA's
+    kelvin -> RGB in between, a custom color the controller converts to its pixels."""
 
     _attr_translation_key = "color"
     _attr_color_mode = ColorMode.RGB
@@ -770,10 +773,18 @@ class PaletteLight(ControllerEntity, LightEntity, RestoreEntity):
             self._last_color = MODE_WHITES[mode] if white else color  # a white as sent (Warm White reads back dimmer)
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        """A temperature: the warm (up to 4600 K) or cool white, exact; a color, scaled by a brightness; bare, the
-        slot's last non-black color (a white too, exact), default red."""
+        """A temperature: at (or past) either end the controller's warm or cool white, exact; in between HA's
+        kelvin -> RGB, scaled by a brightness; a color, scaled by a brightness; bare, the slot's last non-black color
+        (a white too, exact), default red."""
         if (kelvin := kwargs.get(ATTR_COLOR_TEMP_KELVIN)) is not None:
-            color = MODE_WHITES[COLOR_WARM_WHITE if kelvin <= WHITE_SPLIT_KELVIN else COLOR_COOL_WHITE]
+            kelvin = min(max(kelvin, WARM_WHITE_KELVIN), COOL_WHITE_KELVIN)
+            if kelvin == WARM_WHITE_KELVIN:
+                color = MODE_WHITES[COLOR_WARM_WHITE]
+            elif kelvin == COOL_WHITE_KELVIN:
+                color = MODE_WHITES[COLOR_COOL_WHITE]
+            else:
+                red, green, blue = color_util.color_temperature_to_rgb(kelvin)
+                color = _scaled((round(red), round(green), round(blue)), kwargs.get(ATTR_BRIGHTNESS))
         else:
             rgb = kwargs.get(ATTR_RGB_COLOR)
             base: RGB = (rgb[0], rgb[1], rgb[2]) if rgb is not None else self._last_color

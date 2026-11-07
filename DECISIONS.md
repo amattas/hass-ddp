@@ -144,3 +144,10 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
   (on/off = the controller's Power, brightness = its intensity, no effects), replacing the Power switch; the
   controller entities are that light, Color 1..5 and Scene. `ddp.recall_preset` / `ddp.set_colors` target the light
   again. Stale switch/number entities are removed at setup.
+- 2026-11-07: Color N's Temperature tab is a continuous range. 2700 K sends the controller's Warm White and 6500 K
+  its Cool White, exact (temperatures past either end are clamped to it); anything in between sends Home Assistant's
+  kelvin -> RGB (`color_temperature_to_rgb`), scaled by a brightness. The controller runs in a 3-channel RGB input
+  mode and converts any RGB to its pixels itself, so snapping to the two presets threw away the in-between
+  temperatures. An in-between slot is a custom color and reads back as RGB; only the two preset whites read back as
+  a temperature. No in-range kelvin at any brightness yields a value the readback takes for a white (checked over
+  2701-6499 K, brightness 1-255), so no guard is needed.
