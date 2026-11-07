@@ -16,11 +16,12 @@ over DDP stops the overlapping lights' runners and shows the ``ddp`` and ``scene
 the pixels then show only the light that was turned on, where it covers them. Which pixels the sender keeps resending
 follows the lights' state (``DDPRuntime.sync_holds``, after every change).
 
-The controller device's Power switch and Scene select run the controller's built-in effects and stored presets; DDP
+The controller device's main light and Scene select run the controller's built-in effects and stored presets; DDP
 data overrides those while it flows, so once the controller took the command every DDP light goes to ``scene``
 (sending nothing) and the sender is released (``ControllerCommands``). A poll that finds a scene started or stopped
 outside HA does the same. "Color 1".."Color 5" set one slot each of the palette those effects use, which leaves DDP
-alone (``ddp.set_colors`` on Power sets them all); each slot's "Mode N" select picks a custom color or a white.
+alone (``ddp.set_colors`` on the controller light sets them all);
+a Color tab sets a custom color, a Temperature tab one of the whites.
 """
 
 from __future__ import annotations
@@ -55,6 +56,7 @@ from homeassistant.helpers.restore_state import ExtraStoredData, RestoredExtraDa
 from . import DDPConfigEntry, DDPRuntime, SegmentConfig
 from .commands import MODE_COLOR, MODE_WHITES, ControllerCommands, slot_mode
 from .const import (
+    ATTR_BACKGROUND,
     ATTR_BLOCK_SIZE,
     ATTR_COLORS,
     ATTR_PARAMS,
@@ -72,7 +74,7 @@ from .const import (
     Color,
     LightSource,
 )
-from .controller import DEFAULT_CUSTOM_COLOR, EMPTY_COLOR, PALETTE_SLOTS, SLOT_WHITES
+from .controller import DEFAULT_CUSTOM_COLOR, EMPTY_COLOR, PALETTE_SLOTS
 from .coordinator import SceneState
 from .entity import ControllerEntity, DDPEntity, controller_device_parent, device_identifiers
 
@@ -90,9 +92,10 @@ EFFECTS: dict[str, EffectInfo] = {info.name: info for info in list_effects() if 
 ATTR_PATTERN = "pattern"
 ATTR_SOURCE = "source"  # restore data: a light that was on showing a scene is not re-sent
 ALL_SOURCES = tuple(LightSource)
+CONTROLLER_KEY = "controller"  # unique-ID suffix of the controller light (the pre-0.4 ID, reused)
+ATTR_LAST_EFFECT = "last_effect"  # restore data: the last scene, for a bare turn_on after a restart
 COLOR_KEY = "color"  # unique-ID suffix of a palette slot light, with its slot: color_1 .. color_5
 ATTR_LAST_COLOR = "last_color"  # restore data: a palette slot's last color, for a bare turn_on of an empty slot
-ATTR_LAST_CUSTOM = "last_custom"  # restore data: a palette slot's last custom color, for Mode = Color
 # A palette light's Temperature tab: the controller's two whites, warm up to the split, cool above it.
 WARM_WHITE_KELVIN = 2700
 COOL_WHITE_KELVIN = 6500
@@ -170,11 +173,11 @@ async def async_setup_entry(
         lights.append(AllOutputsLight(entry, SegmentConfig(STRIP_KEY, None, whole)))
     runtime.segment_lights = lights
     # Drop lights this entry no longer has: an output the re-read layout lost, All outputs once one output is left,
-    # the controller's lights after a switch to Generic DDP, and the controller light (``<entry>_controller``) that
-    # the Power switch replaced.
+    # and the controller's lights after a switch to Generic DDP.
     current = {light.unique_id for light in lights}
     if runtime.commands is not None:
         current |= {f"{entry.entry_id}_{COLOR_KEY}_{slot}" for slot in range(1, PALETTE_SLOTS + 1)}
+        current.add(f"{entry.entry_id}_{CONTROLLER_KEY}")
     registry = er.async_get(hass)
     for registered in er.async_entries_for_config_entry(registry, entry.entry_id):
         if registered.domain == LIGHT_DOMAIN and registered.unique_id not in current:
@@ -189,7 +192,12 @@ async def async_setup_entry(
         return
     parent = controller_device_parent(hass, entry)
     commands = runtime.commands
-    async_add_entities(PaletteLight(entry, commands, parent, slot) for slot in range(1, PALETTE_SLOTS + 1))
+    async_add_entities(
+        [
+            ControllerLight(entry, commands, CONTROLLER_KEY, parent),
+            *(PaletteLight(entry, commands, parent, slot) for slot in range(1, PALETTE_SLOTS + 1)),
+        ]
+    )
 
 
 def _color(value: object) -> Color | None:
@@ -651,9 +659,67 @@ def _scaled(color: RGB, brightness: int | None) -> RGB:
     return (round(color[0] * brightness / 255), round(color[1] * brightness / 255), round(color[2] * brightness / 255))
 
 
+class ControllerLight(ControllerEntity, LightEntity, RestoreEntity):
+    """The controller device's main entity: on while the controller runs a scene, brightness its intensity (percent
+    of 255). turn_on runs the last scene (else the first), turn_off the controller's "Off". It also takes
+    ``ddp.recall_preset`` and ``ddp.set_colors`` and shows the palette as ``colors`` and ``background``. The
+    controller is the truth (polled); restoring never commands it."""
+
+    _attr_name = None  # the device's main entity
+    _attr_translation_key = "controller"
+    _attr_color_mode = ColorMode.BRIGHTNESS
+    _attr_supported_color_modes = {ColorMode.BRIGHTNESS}
+
+    async def async_added_to_hass(self) -> None:
+        """Remember the last scene for a bare turn_on (the coordinator's ``last_effect``, shared with Scene)."""
+        await super().async_added_to_hass()
+        extra = await self.async_get_last_extra_data()
+        last = extra.as_dict().get(ATTR_LAST_EFFECT) if extra is not None else None
+        if self.coordinator.last_effect is None and isinstance(last, str) and last != CONTROLLER_OFF:
+            self.coordinator.last_effect = last
+
+    @property
+    def extra_restore_state_data(self) -> ExtraStoredData:
+        return RestoredExtraData({ATTR_LAST_EFFECT: self.coordinator.last_effect})
+
+    @property
+    def is_on(self) -> bool:
+        return self.scene_on
+
+    @property
+    def brightness(self) -> int | None:
+        state = self.scene
+        return round(state.intensity * 255 / 100) if state is not None and state.intensity is not None else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any] | None:
+        """The palette, once it has been read."""
+        state = self.scene
+        if state is None or state.background is None:
+            return None
+        return {ATTR_COLORS: [list(color) for color in state.colors], ATTR_BACKGROUND: list(state.background)}
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        if (brightness := kwargs.get(ATTR_BRIGHTNESS)) is not None:
+            await self._commands.set_intensity(self.entity_id, max(1, round(brightness * 100 / 255)))
+        await self._commands.turn_on(self.entity_id)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._commands.turn_off(self.entity_id)
+
+    async def async_recall_preset(self, preset: int) -> None:
+        """The ``recall_preset`` action."""
+        await self._commands.recall_preset(self.entity_id, preset)
+
+    async def async_set_colors(self, colors: Sequence[RGB], background: RGB | None = None) -> None:
+        """The ``set_colors`` action. The palette is the controller's own setting, so DDP keeps the pixels and the
+        controller need not be on."""
+        await self._commands.set_palette(self.entity_id, colors, background)
+
+
 class PaletteLight(ControllerEntity, LightEntity, RestoreEntity):
     """One slot of the controller's palette ("Color 1".."Color 5"); off is an empty slot. A Color tab sets a custom
-    color; a Temperature tab sets one of the controller's whites (warm 2700 K, cool 6500 K), the slot's "Mode N"."""
+    color; a Temperature tab sets one of the controller's whites (warm 2700 K, cool 6500 K)."""
 
     _attr_translation_key = "color"
     _attr_color_mode = ColorMode.RGB
@@ -676,21 +742,13 @@ class PaletteLight(ControllerEntity, LightEntity, RestoreEntity):
         await super().async_added_to_hass()
         extra = await self.async_get_last_extra_data()
         stored = extra.as_dict() if extra is not None else {}
-        last_color, last_custom = _rgb(stored.get(ATTR_LAST_COLOR)), _rgb(stored.get(ATTR_LAST_CUSTOM))
-        # A read since startup is newer than what was stored; 0.4.0 stored only the last color.
-        for custom in (last_custom, last_color):
-            if custom is not None and custom != EMPTY_COLOR and custom not in SLOT_WHITES:
-                self.coordinator.last_custom.setdefault(self._slot, custom)
-                break
+        last_color = _rgb(stored.get(ATTR_LAST_COLOR))  # old restore data may carry a ``last_custom`` key: ignored
         if not self._attr_is_on and last_color is not None and last_color != EMPTY_COLOR:
             self._last_color = last_color  # a white too: clearing it, a bare turn_on brings it back
 
     @property
     def extra_restore_state_data(self) -> ExtraStoredData:
-        custom = self.coordinator.last_custom.get(self._slot)
-        return RestoredExtraData(
-            {ATTR_LAST_COLOR: list(self._last_color), ATTR_LAST_CUSTOM: list(custom) if custom is not None else None}
-        )
+        return RestoredExtraData({ATTR_LAST_COLOR: list(self._last_color)})
 
     @callback
     def _handle_coordinator_update(self) -> None:

@@ -19,7 +19,7 @@ All protocol code lives in [aioddp](https://github.com/amattas/aioddp), and Minl
 
 | Device | Support |
 |---|---|
-| Minleon NDB-Pro with Rainmin RGB+ pixels | The reference device. DDP lights plus the controller device (Power, Color 1-5, Mode 1-5, Scene, Intensity), `ddp.recall_preset`, and `ddp.set_colors` |
+| Minleon NDB-Pro with Rainmin RGB+ pixels | The reference device. DDP lights plus the controller device (main light, Color 1-5, Scene), `ddp.recall_preset`, and `ddp.set_colors` |
 | Any other DDP v1 controller (UDP port 4048) | **Generic DDP**: one light per output, or one light for the whole strip. Not tested beyond the DDP spec |
 
 RGB and RGBW pixels are supported. DDP is send-only, so Home Assistant cannot read a controller's state back over DDP;
@@ -67,10 +67,10 @@ for which controllers have been exercised.
 | Lights do not react | Host is right; UDP 4048 is not blocked between Home Assistant and the controller; nothing else is sending DDP to it; the output is patched on the controller. The brightness cap (default 60%) may also make colors dimmer than expected |
 | Colors are wrong (red and green swapped, ...) | Set **Color order** in the options to match the pixels |
 | A solid color turns into the controller's own effect after about 20 s | The keepalive is off or too long; set it to 1 s |
-| Power, Color 1-5, Mode 1-5, Scene, or Intensity are unavailable | The controller's web UI (TCP 80) is not answering. The DDP lights are unaffected; the controller device's entities recover on the next 30 s poll |
-| Color N shows a temperature, not a color | Its Mode is Warm White or Cool White: the slot holds one of the controller's whites. Pick a color, or set Mode to Color to bring back its last custom color |
+| The controller light, Color 1-5, or Scene are unavailable | The controller's web UI (TCP 80) is not answering. The DDP lights are unaffected; the controller device's entities recover on the next 30 s poll |
+| Color N shows a temperature, not a color | The slot holds one of the controller's whites (Warm White or Cool White). Pick a color on its Color tab; the Temperature tab is the white picker |
 | The controller has a new IP address | **Reconfigure** the entry and enter the new host (give the controller a DHCP reservation to avoid this) |
-| `ddp.recall_preset` or `ddp.set_colors` does nothing or is refused | Nothing happens (and the log warns about the target) when the target is not a Power switch, for example a light or a Generic DDP entry, which has none. `ddp.set_colors` refuses more than 5 colors, a component outside 0-255, or a name other than `cool_white` / `warm_white` |
+| `ddp.recall_preset` or `ddp.set_colors` does nothing or is refused | Nothing happens (and the log warns about the target) when the target is not the controller light, for example a light or a Generic DDP entry, which has none. `ddp.set_colors` refuses more than 5 colors, a component outside 0-255, or a name other than `cool_white` / `warm_white` |
 | `ddp.set_pattern` is refused | The target is a Color light, the effect takes no colors (`rainbow`), or a `params` value is out of range or not a parameter of that effect (the message names it) |
 | A color with a white value is refused | The entry is RGB, or the effect is not `palette` (the animated effects render RGB only). For white, set the NDB-Pro to a 4-channel input mode and reconfigure the entry |
 | An output light turned off by itself | All outputs was turned on; it owns the pixels of every output until an output light is turned on again |

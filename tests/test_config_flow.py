@@ -26,11 +26,9 @@ from .conftest import FIXTURES, FakeController
 HOST = "127.0.0.1"
 # The controller device's entities (platform, unique-ID suffix), which only a vendor controller type has.
 CONTROLLER_ENTITIES = [
-    ("switch", "power"),
+    ("light", "controller"),
     *(("light", f"color_{slot}") for slot in range(1, 6)),
-    *(("select", f"mode_{slot}") for slot in range(1, 6)),
     ("select", "scene"),
-    ("number", "intensity"),
 ]
 DISCOVER = "custom_components.ddp.config_flow.discover"
 OPEN = "custom_components.ddp.config_flow.DDPSender.open"

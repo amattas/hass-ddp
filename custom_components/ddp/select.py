@@ -1,36 +1,33 @@
-"""The controller device's selects: "Scene" (the controller's built-in effects, the running one selected) and
-"Mode 1".."Mode 5" (what each palette slot holds: a custom color or one of the controller's whites)."""
+"""The controller device's "Scene" select (the controller's built-in effects, the running one selected)."""
 
 from __future__ import annotations
 
+from homeassistant.components.select import DOMAIN as SELECT_DOMAIN
 from homeassistant.components.select import SelectEntity
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import DDPConfigEntry
-from .commands import MODE_WHITES, SLOT_MODES, ControllerCommands, slot_mode
-from .controller import PALETTE_SLOTS
 from .entity import ControllerEntity, controller_device_parent
 
 # Commands serialize on the coordinator lock.
 PARALLEL_UPDATES = 0
 
 SCENE_KEY = "scene"  # unique-ID suffix
-MODE_KEY = "mode"  # unique-ID suffix of a slot's mode, with its slot: mode_1 .. mode_5
 
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: DDPConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
     """Only a vendor controller type has a controller device (Generic DDP's was removed with its entities)."""
+    registry = er.async_get(hass)
+    current = {f"{entry.entry_id}_{SCENE_KEY}"} if entry.runtime_data.commands is not None else set()
+    for registered in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if registered.domain == SELECT_DOMAIN and registered.unique_id not in current:
+            registry.async_remove(registered.entity_id)  # the removed Mode 1..5 selects
     if (commands := entry.runtime_data.commands) is not None:
-        parent = controller_device_parent(hass, entry)
-        async_add_entities(
-            [
-                SceneSelect(entry, commands, SCENE_KEY, parent),
-                *(ModeSelect(entry, commands, parent, slot) for slot in range(1, PALETTE_SLOTS + 1)),
-            ]
-        )
+        async_add_entities([SceneSelect(entry, commands, SCENE_KEY, controller_device_parent(hass, entry))])
 
 
 class SceneSelect(ControllerEntity, SelectEntity):
@@ -49,28 +46,3 @@ class SceneSelect(ControllerEntity, SelectEntity):
 
     async def async_select_option(self, option: str) -> None:
         await self._commands.turn_on(self.entity_id, option)
-
-
-class ModeSelect(ControllerEntity, SelectEntity):
-    """A palette slot's mode, read from the slot (#c69740 or #ffffff Warm White, #feffff Cool White, anything else,
-    black included, Color). A white is sent at once; Color, from a white, re-sends the slot's last custom color
-    (default red), and otherwise leaves the slot as it is."""
-
-    _attr_translation_key = "mode"
-    _attr_options = SLOT_MODES
-
-    def __init__(self, entry: DDPConfigEntry, commands: ControllerCommands, ddp_device_id: str, slot: int) -> None:
-        super().__init__(entry, commands, f"{MODE_KEY}_{slot}", ddp_device_id)
-        self._slot = slot
-        self._attr_translation_placeholders = {"slot": str(slot)}
-
-    @property
-    def current_option(self) -> str | None:
-        colors = self.scene.colors if self.scene is not None else ()
-        return slot_mode(colors[self._slot - 1]) if len(colors) >= self._slot else None
-
-    async def async_select_option(self, option: str) -> None:
-        if option in MODE_WHITES:
-            await self._commands.set_color(self.entity_id, self._slot, MODE_WHITES[option])
-        else:  # decided under the coordinator lock, from the current palette
-            await self._commands.restore_custom(self.entity_id, self._slot)

@@ -1,5 +1,4 @@
-"""Commands to a vendor controller, shared by the controller device's entities (Power, Scene, Color/Mode 1-5,
-Intensity).
+"""Commands to a vendor controller, shared by the controller device's entities (main light, Scene, Color 1-5).
 
 Every command runs under the coordinator's lock (so a stale poll cannot undo it) and publishes what it changed. A
 command that starts a scene hands the pixels back from DDP once the controller took it: every DDP light shows the
@@ -22,7 +21,6 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from .const import COLOR_COOL_WHITE, COLOR_WARM_WHITE, CONTROLLER_OFF, DOMAIN, RGB, LightSource
 from .controller import (
     CONTROLLER_ERRORS,
-    DEFAULT_CUSTOM_COLOR,
     EMPTY_COLOR,
     NAMED_COLORS,
     PALETTE_SLOTS,
@@ -36,13 +34,12 @@ if TYPE_CHECKING:
 _LOGGER = logging.getLogger(__name__)
 ALL_SOURCES = tuple(LightSource)
 
-# A palette slot's mode ("Mode N"): a custom color, or one of the controller's whites, sent as its exact value.
+# A palette slot holds a custom color or one of the controller's whites (sent as its exact value).
 MODE_COLOR = "color"
 MODE_WHITES: dict[str, RGB] = {
     COLOR_WARM_WHITE: NAMED_COLORS[COLOR_WARM_WHITE],
     COLOR_COOL_WHITE: NAMED_COLORS[COLOR_COOL_WHITE],
 }
-SLOT_MODES = [MODE_COLOR, *MODE_WHITES]
 # What a slot reads back as for each white (Warm White shows as #c69740 once the controller set it).
 _WHITE_READBACK: dict[RGB, str] = {
     **{color: mode for mode, color in MODE_WHITES.items()},
@@ -165,25 +162,6 @@ class ControllerCommands:
             if data is None or len(data.colors) != PALETTE_SLOTS:
                 await self.coordinator.async_read_after_command()
                 return
-            colors = list(data.colors)
-            colors[slot - 1] = color
-            self._publish(colors=tuple(colors))
-
-    async def restore_custom(self, entity_id: str | None, slot: int) -> None:
-        """Mode = Color: if palette ``slot`` holds a white *now*, re-send its last custom color (default red).
-
-        Decided under the coordinator lock from the current palette, so a concurrent Color N command (an HA scene
-        applies both at once) is never overwritten by a stale snapshot.
-        """
-        async with self.coordinator.lock:
-            data = self.coordinator.data
-            if data is None or len(data.colors) < slot or slot_mode(data.colors[slot - 1]) not in MODE_WHITES:
-                return
-            color = self.coordinator.last_custom.get(slot, DEFAULT_CUSTOM_COLOR)
-            try:
-                await self.coordinator.controller.set_color(slot, color)
-            except CONTROLLER_ERRORS as err:
-                raise controller_error(entity_id, err) from err
             colors = list(data.colors)
             colors[slot - 1] = color
             self._publish(colors=tuple(colors))

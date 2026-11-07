@@ -13,7 +13,7 @@
       },
       "controller": {
         "title": "Controller type",
-        "description": "Detected controller: {detected}. A vendor controller type adds a controller device with a Power switch for the controller's built-in effects and presets, a light and a Mode select per palette color, a Scene select and an Intensity setting. Generic DDP creates only the per-output DDP lights.",
+        "description": "Detected controller: {detected}. A vendor controller type adds a controller device with a main light (on/off and brightness) for the controller's built-in effects and presets, a light per palette color and a Scene select. Generic DDP creates only the per-output DDP lights.",
         "data": {
           "controller_type": "Controller type"
         },
@@ -118,6 +118,12 @@
     },
     "rgbw_effect_unsupported": {
       "message": "Effect {effect} renders RGB only, so its colors take red, green, blue only. Effects that take white: {effects}"
+    },
+    "not_a_controller": {
+      "message": "{entity} is not the controller light; recall_preset works only on the light named like the controller device."
+    },
+    "palette_not_a_controller": {
+      "message": "{entity} is not the controller light; set_colors works only on the light named like the controller device."
     }
   },
   "services": {
@@ -159,7 +165,7 @@
     },
     "set_colors": {
       "name": "Set colors",
-      "description": "Sets the colors the controller's built-in effects use (its palette of 5 custom colors), on a controller's Power switch. Power need not be on, and DDP lights keep the pixels. No colors clears the palette, so the controller picks random colors.",
+      "description": "Sets the colors the controller's built-in effects use (its palette of 5 custom colors), on the controller light. The controller need not be on, and DDP lights keep the pixels. No colors clears the palette, so the controller picks random colors.",
       "fields": {
         "colors": {
           "name": "Colors",
@@ -179,28 +185,8 @@
       },
       "color": {
         "name": "Color {slot}"
-      }
-    },
-    "number": {
-      "intensity": {
-        "name": "Intensity"
-      }
-    },
-    "select": {
-      "scene": {
-        "name": "Scene"
       },
-      "mode": {
-        "name": "Mode {slot}",
-        "state": {
-          "color": "Color",
-          "warm_white": "Warm White",
-          "cool_white": "Cool White"
-        }
-      }
-    },
-    "switch": {
-      "power": {
+      "controller": {
         "state_attributes": {
           "colors": {
             "name": "Colors"
@@ -209,6 +195,11 @@
             "name": "Background"
           }
         }
+      }
+    },
+    "select": {
+      "scene": {
+        "name": "Scene"
       }
     }
   }

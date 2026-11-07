@@ -6,28 +6,14 @@
       },
       "color": {
         "default": "mdi:format-color-fill"
-      }
-    },
-    "number": {
-      "intensity": {
-        "default": "mdi:brightness-percent"
+      },
+      "controller": {
+        "default": "mdi:palette"
       }
     },
     "select": {
       "scene": {
         "default": "mdi:movie-open-play"
-      },
-      "mode": {
-        "default": "mdi:palette-outline",
-        "state": {
-          "warm_white": "mdi:white-balance-incandescent",
-          "cool_white": "mdi:white-balance-sunny"
-        }
-      }
-    },
-    "switch": {
-      "power": {
-        "default": "mdi:power"
       }
     }
   },

@@ -74,7 +74,7 @@ MAX_PATTERN_COLORS: Final = 16
 ATTR_COLORS: Final = "colors"
 ATTR_BLOCK_SIZE: Final = "block_size"
 ATTR_PARAMS: Final = "params"
-SERVICE_SET_COLORS: Final = "set_colors"  # the controller's palette, on the Power switch
+SERVICE_SET_COLORS: Final = "set_colors"  # the controller's palette, on the controller light
 ATTR_BACKGROUND: Final = "background"
 # set_colors names for the controller's own whites (exact RGB values the vendor maps to its white LEDs)
 COLOR_COOL_WHITE: Final = "cool_white"
