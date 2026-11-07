@@ -144,3 +144,22 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
   (on/off = the controller's Power, brightness = its intensity, no effects), replacing the Power switch; the
   controller entities are that light, Color 1..5 and Scene. `ddp.recall_preset` / `ddp.set_colors` target the light
   again. Stale switch/number entities are removed at setup.
+
+## 2026-11-07: Generic DDP manual setup defines outputs explicitly
+
+- Generic DDP users must be able to address specific pixels, so the manual setup no longer asks for a pixel count and
+  makes one "All" light. It asks for the pixel type (RGB = 3 channels per pixel, RGBW = 4) and the number of outputs
+  (1-16), then one form per output: name, first pixel, last pixel (1-based, inclusive, across the whole controller).
+- Stored as today's segments (`output<N>` keys, 0-based start, length), so the entry shape and version (2) are
+  unchanged and no migration is needed. The pixel count is derived: the highest last pixel.
+- Gaps between outputs are allowed (those pixels are never driven); overlaps are refused (`output_overlap`), as is a
+  last pixel before the first (`invalid_range`).
+- Adding: a vendor type with a usable layout still creates the entry directly. Generic DDP always walks the manual
+  and output steps, prefilled from the detected layout when there is one (pixel type, outputs, names, ranges; the
+  layout's title and device info are kept); without a layout the forms show defaults (1 output, pixels 1-50, next
+  outputs continuing after the previous one).
+- Reconfigure walks the same steps for Generic DDP (always, even if DDP discovery would answer) and for a vendor type
+  that gives no layout, prefilled from the stored data type and segments (stored data wins over a detected layout; every entry has stored
+  segments, so a reconfigure never needs the layout tier); then the usual reconfigure update (device
+  identifiers follow the host, a color order of the other data type is dropped). An output whose key disappears loses
+  its light through the existing stale-entity pruning; old manual entries' "all" segment goes that way.

@@ -22,7 +22,7 @@ rules:
       share, and entity.py the DDPEntity and ControllerEntity bases.
   config-flow-test-coverage:
     status: done
-    comment: config_flow.py is at 100% line coverage (user, controller, manual, reconfigure, options, error paths).
+    comment: config_flow.py is at 100% line coverage (user, controller, manual, output, reconfigure, options, error paths).
   config-flow:
     status: done
     comment: Every field has a label and a data_description. There are no credentials, so nothing goes in a secrets field.
