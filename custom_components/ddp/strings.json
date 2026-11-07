@@ -3,7 +3,7 @@
     "step": {
       "user": {
         "title": "Add a DDP pixel controller",
-        "description": "Enter the controller's address. Home Assistant asks the controller for its output layout and checks which kind of controller it is. If it can't tell, you'll enter the pixel count yourself. DDP has no acknowledgement, so setup can only check that a socket opens. Nothing is sent to the lights.",
+        "description": "Enter the controller's address. Home Assistant asks the controller for its output layout and checks which kind of controller it is. If it can't tell, you'll describe the outputs yourself. DDP has no acknowledgement, so setup can only check that a socket opens. Nothing is sent to the lights.",
         "data": {
           "host": "Host"
         },
@@ -22,20 +22,34 @@
         }
       },
       "manual": {
-        "title": "Describe the strip",
-        "description": "The controller did not report a usable layout. One light covering the whole strip will be created.",
+        "title": "Describe the outputs",
+        "description": "Define the outputs yourself; the fields are prefilled from the detected or stored layout when there is one. Next you'll enter each output's name and pixel range; one light is created per output.",
         "data": {
-          "pixel_count": "Pixel count",
-          "data_type": "Pixel type"
+          "data_type": "Pixel type",
+          "outputs": "Number of outputs"
         },
         "data_description": {
-          "pixel_count": "Total pixels the controller drives.",
-          "data_type": "Channels per pixel."
+          "data_type": "Channels per pixel: RGB is 3, RGBW is 4.",
+          "outputs": "How many lights to create, each over its own pixel range (1 to 16)."
+        }
+      },
+      "output": {
+        "title": "Output {output} of {outputs}",
+        "description": "Name this output and the pixels it covers, counting from 1 across the whole controller. Ranges may leave gaps but must not overlap another output.",
+        "data": {
+          "name": "Name",
+          "first_pixel": "First pixel",
+          "last_pixel": "Last pixel"
+        },
+        "data_description": {
+          "name": "The light's name.",
+          "first_pixel": "First pixel of this output, counting from 1.",
+          "last_pixel": "Last pixel of this output, included."
         }
       },
       "reconfigure": {
         "title": "Reconfigure the controller",
-        "description": "Detected controller: {detected}. Stored pixel type: {data_type}. Layout the controller reports now: {layout}. Submitting stores the reported layout (pixel type, outputs and pixel count), so a change of the controller's input mode (3 or 4 channels) takes effect; an output that is gone loses its light. When the controller reports no layout (none), the stored layout is kept. Changing the host keeps the device and its lights. Changing the type adds or removes the controller device and its entities; the DDP lights are kept.",
+        "description": "Detected controller: {detected}. Stored pixel type: {data_type}. Layout the controller reports now: {layout}. Submitting stores the reported layout (pixel type, outputs and pixel count), so a change of the controller's input mode (3 or 4 channels) takes effect; an output that is gone loses its light. Generic DDP, or a controller that reports no layout (none), continues to the output steps, prefilled with the stored outputs. Changing the host keeps the device and its lights. Changing the type adds or removes the controller device and its entities; the DDP lights are kept.",
         "data": {
           "host": "Host",
           "controller_type": "Controller type"
@@ -48,7 +62,9 @@
     },
     "error": {
       "cannot_connect": "Could not open a UDP socket to the controller. Check the host.",
-      "invalid_config": "The host or pixel count is not valid for DDP."
+      "invalid_config": "The host or pixel count is not valid for DDP.",
+      "invalid_range": "The last pixel must not come before the first pixel.",
+      "output_overlap": "This range overlaps an earlier output."
     },
     "abort": {
       "already_configured": "This controller is already configured.",

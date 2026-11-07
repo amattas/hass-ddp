@@ -39,8 +39,11 @@ one registry entry). See `DECISIONS.md`.
   base. `DeviceInfo` is built in one call (since HA 2026.11 it is not a dict)
 - `controller.py`: controller type registry, `Controller` protocol, `detect`, `create_controller`, `fetch_layout`
 - `config_flow.py`: host -> `aioddp.discover` + `detect` -> controller type step (detected preselected, Generic always
-  offered) -> entry, or manual fallback; reconfigure changes host/type and re-reads the layout; options flow (cap,
-  color order, fps, keepalive)
+  offered) -> entry (vendor type with a layout), else the manual steps (Generic DDP, or no layout; prefilled from the
+  detected layout if any): pixel type + number of outputs, then one `output` step per output (name, 1-based
+  first/last pixel; gaps allowed, overlaps refused; pixel count = highest last pixel); reconfigure changes
+  host/type and re-reads the layout, or for Generic (or no layout) walks the same manual/output steps prefilled from
+  the stored segments; options flow (cap, color order, fps, keepalive)
 - `light.py`: `DDPSegmentLight` (`LightEntity` + `RestoreEntity`), RGB or RGBW color mode from the entry's data type,
   aioddp effects, `ddp.set_pattern` (kept in restore state); a `source` of `off`/`ddp`/`scene`/`blanked` (see
   DECISIONS.md 2026-11-06); `AllOutputsLight` over the whole strip when there is more than one segment (DDP lights

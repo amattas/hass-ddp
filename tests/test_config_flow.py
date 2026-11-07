@@ -145,27 +145,79 @@ async def test_controller_type_is_preselected_and_overridable(
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {"controller_type": choice} if choice else {}
     )
+    if expected == "generic":  # Generic DDP takes the outputs from the user, prefilled from the detected layout
+        assert result["step_id"] == "manual"
+        assert result["data_schema"]({}) == {"data_type": "rgb", "outputs": 2}  # type: ignore[misc]
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        assert result["data_schema"]({}) == {"name": "Output 1", "first_pixel": 1, "last_pixel": 80}  # type: ignore[misc]
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        assert result["data_schema"]({}) == {"name": "Output 2", "first_pixel": 81, "last_pixel": 122}  # type: ignore[misc]
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] != HOST  # the layout's title and device info, Generic DDP included
+    assert result["data"]["model"] is not None
     assert result["data"]["controller_type"] == expected
-    assert [s["length"] for s in result["data"]["segments"]] == [80, 42]
+    assert result["data"]["segments"] == [
+        {"key": "output1", "name": "Output 1", "start": 0, "length": 80},
+        {"key": "output2", "name": "Output 2", "start": 80, "length": 42},
+    ]
+    assert result["data"]["pixel_count"] == 122
 
 
 MONO_CONFIG = {"config": {"conv": 3, "ports": [{"p": 0, "l": 10, "ss": 1}]}}
 EMPTY_CONFIG = {"config": {"conv": 13, "ports": [{"p": 0, "l": 0, "ss": 1}]}}
 
 
+async def _walk_outputs(
+    hass: HomeAssistant, result: config_entries.ConfigFlowResult, outputs: list[dict[str, Any]]
+) -> config_entries.ConfigFlowResult:
+    """Submit one output form per item (``{}`` takes the form's defaults), checking the progress placeholder."""
+    for number, output in enumerate(outputs, start=1):
+        assert result["type"] is FlowResultType.FORM
+        assert result["step_id"] == "output"
+        assert result["description_placeholders"] == {"output": str(number), "outputs": str(len(outputs))}
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], output)
+    return result
+
+
+def _output(name: str, first: int, last: int) -> dict[str, Any]:
+    return {"name": name, "first_pixel": first, "last_pixel": last}
+
+
 @pytest.mark.parametrize(
-    ("discovered", "data_type"),
+    ("discovered", "data_type", "outputs", "segments"),
     [
-        (AsyncMock(return_value=None), "rgb"),
-        (AsyncMock(side_effect=DDPQueryError("garbled reply")), "rgbw"),
-        (AsyncMock(return_value=parse_config(MONO_CONFIG, host=HOST, source="ddp")), "rgb"),
-        (AsyncMock(return_value=parse_config(EMPTY_CONFIG, host=HOST, source="http")), "rgb"),
+        # One output, the form's defaults: pixels 1-50.
+        (AsyncMock(return_value=None), "rgb", [{}], [("output1", "Output 1", 0, 50)]),
+        # Two named outputs with a gap (101-150 undriven): the pixel count is the highest last pixel.
+        (
+            AsyncMock(side_effect=DDPQueryError("garbled reply")),
+            "rgbw",
+            [_output("Roof", 1, 100), _output("Garage", 151, 200)],
+            [("output1", "Roof", 0, 100), ("output2", "Garage", 150, 50)],
+        ),
+        (
+            AsyncMock(return_value=parse_config(MONO_CONFIG, host=HOST, source="ddp")),
+            "rgb",
+            [_output("Strip", 1, 300)],
+            [("output1", "Strip", 0, 300)],
+        ),
+        # Defaults chain: output 2 starts right after output 1.
+        (
+            AsyncMock(return_value=parse_config(EMPTY_CONFIG, host=HOST, source="http")),
+            "rgb",
+            [{}, {}],
+            [("output1", "Output 1", 0, 50), ("output2", "Output 2", 50, 50)],
+        ),
     ],
     ids=["no-reply", "query-error", "undrivable-data-type", "no-active-outputs"],
 )
 async def test_manual_step_when_discovery_gives_nothing_usable(
-    hass: HomeAssistant, discovered: AsyncMock, data_type: str
+    hass: HomeAssistant,
+    discovered: AsyncMock,
+    data_type: str,
+    outputs: list[dict[str, Any]],
+    segments: list[tuple[str, str, int, int]],
 ) -> None:
     result = await _enter_host(hass, discovered=discovered)
     assert result["step_id"] == "controller"
@@ -174,18 +226,44 @@ async def test_manual_step_when_discovery_gives_nothing_usable(
     assert result["step_id"] == "manual"
 
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"pixel_count": 300, "data_type": data_type}
+        result["flow_id"], {"outputs": len(outputs), "data_type": data_type}
     )
+    result = await _walk_outputs(hass, result, outputs)
     await hass.async_block_till_done()
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == HOST
     assert result["data"] == {
         "host": HOST,
-        "pixel_count": 300,
+        "pixel_count": max(start + length for _, _, start, length in segments),
         "data_type": data_type,
-        "segments": [{"key": "all", "name": "All", "start": 0, "length": 300}],
+        "segments": [{"key": k, "name": n, "start": s, "length": length} for k, n, s, length in segments],
         "controller_type": "generic",
     }
+
+
+@pytest.mark.parametrize(
+    ("second", "error"),
+    [
+        (_output("B", 100, 120), "output_overlap"),  # pixel 100 is output 1's last
+        (_output("B", 1, 10), "output_overlap"),
+        (_output("B", 150, 120), "invalid_range"),
+    ],
+    ids=["overlap-at-edge", "overlap-inside", "last-before-first"],
+)
+async def test_output_step_refuses_bad_ranges(hass: HomeAssistant, second: dict[str, Any], error: str) -> None:
+    result = await _enter_host(hass)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"controller_type": "generic"})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"outputs": 2})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], _output("A", 1, 100))
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], second)
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "output"
+    assert result["errors"] == {"base": error}
+    assert result["description_placeholders"] == {"output": "2", "outputs": "2"}
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], _output("B", 101, 120))
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"]["pixel_count"] == 120
 
 
 @pytest.mark.parametrize(
@@ -200,11 +278,10 @@ async def test_socket_check_errors(hass: HomeAssistant, discovered: bool, pixel_
         # Detection finds Generic here; the user picks NDB-Pro and the re-shown form must keep that choice.
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {"controller_type": "ndbpro"})
         if not discovered:
-            result = await hass.config_entries.flow.async_configure(
-                result["flow_id"], {"pixel_count": pixel_count, "data_type": "rgb"}
-            )
+            result = await hass.config_entries.flow.async_configure(result["flow_id"], {"outputs": 1})
+            result = await hass.config_entries.flow.async_configure(result["flow_id"], _output("A", 1, pixel_count))
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == ("controller" if discovered else "manual")
+    assert result["step_id"] == ("controller" if discovered else "output")
     assert result["errors"] == {"base": error}
     if discovered:
         assert _default_type(result) == "ndbpro"
@@ -289,12 +366,18 @@ async def test_reconfigure_changes_controller_type_and_reloads(
     }
     assert _default_type(result) == current
 
+    stored = entry.data["segments"]
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"controller_type": target})
+    if target == "generic":  # Generic DDP always takes the outputs from the user, prefilled from the entry
+        assert result["step_id"] == "manual"
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        result = await _walk_outputs(hass, result, [{}, {}])
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
     assert entry.data["controller_type"] == target
+    assert entry.data["segments"] == stored
     assert entry.state is ConfigEntryState.LOADED
     assert (entry.runtime_data.controller is not None) == (target == "ndbpro")
     assert _controller_entities(entity_registry, entry) == (CONTROLLER_ENTITIES if target == "ndbpro" else [])
@@ -356,10 +439,15 @@ async def test_reconfigure_changes_host_and_keeps_the_device(
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"], {"host": " 127.0.0.2 ", "controller_type": "ndbpro"}
         )
+        if not other_entry:  # 127.0.0.2 serves no layout: the stored outputs are confirmed on the output steps
+            assert result["step_id"] == "manual"
+            result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+            result = await _walk_outputs(hass, result, [{}, {}])
     await hass.async_block_till_done()
 
     assert result["type"] is result_type
     if result_type is FlowResultType.FORM:
+        assert result["step_id"] == "output"
         assert result["errors"] == {"base": reason_or_error}
         assert entry.data["host"] == HOST
     else:
@@ -423,6 +511,10 @@ async def test_reconfigure_rereads_the_layout(
     assert result["description_placeholders"]["layout"] == (  # type: ignore[index]
         f"{data_type}, {len(keys)} output{'s' if len(keys) > 1 else ''}, {80 if len(keys) == 1 else 122} pixels"
     )
+    with patch(OPEN, side_effect=DDPSendError("no route")):  # an unreachable host re-shows the form, nothing stored
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {"controller_type": "ndbpro"})
+    assert (result["step_id"], result["errors"]) == ("reconfigure", {"base": "cannot_connect"})
+    assert entry.data["data_type"] == "rgb"
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"controller_type": "ndbpro"})
     await hass.async_block_till_done()
 
@@ -446,7 +538,7 @@ async def test_reconfigure_rereads_the_layout(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-async def test_reconfigure_without_a_layout_keeps_the_stored_one(
+async def test_reconfigure_without_a_layout_prefills_the_stored_one(
     hass: HomeAssistant, flow_controller: FakeController, entry_factory: Callable[..., MockConfigEntry]
 ) -> None:
     entry = entry_factory(controller=flow_controller, data_type="rgbw", options={"color_order": "GRBW"})
@@ -455,10 +547,105 @@ async def test_reconfigure_without_a_layout_keeps_the_stored_one(
     assert result["description_placeholders"] == {"detected": "Generic DDP", "data_type": "rgbw", "layout": "none"}
 
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"controller_type": "ndbpro"})
+    assert result["step_id"] == "manual"
+    assert result["data_schema"]({}) == {"data_type": "rgbw", "outputs": 2}  # type: ignore[misc]
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["data_schema"]({}) == {"name": "Output 1", "first_pixel": 1, "last_pixel": 80}  # type: ignore[misc]
+    result = await _walk_outputs(hass, result, [{}, {}])
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
     assert dict(entry.data) == stored
     assert entry.options == {"color_order": "GRBW"}
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+def _seg(key: str, name: str, start: int, length: int) -> dict[str, Any]:
+    return {"key": key, "name": name, "start": start, "length": length}
+
+
+@pytest.mark.parametrize(
+    ("stored", "outputs", "submitted", "expected", "gone"),
+    [
+        # A prefilled output keeps its key (and its light), even renamed and resized; output 2 is new and has no
+        # stored segment, so it defaults to the pixels right after output 1.
+        (
+            [_seg("all", "All", 0, 122)],
+            2,
+            [_output("Left", 1, 60), {"name": "Right", "last_pixel": 130}],
+            [_seg("all", "Left", 0, 60), _seg("output2", "Right", 60, 70)],
+            [],
+        ),
+        # Keys follow the layout's ports (port 2 empty): submitting unchanged keeps output1/output3.
+        (
+            [_seg("output1", "Output 1", 0, 80), _seg("output3", "Output 3", 80, 42)],
+            2,
+            [{}, {}],
+            [_seg("output1", "Output 1", 0, 80), _seg("output3", "Output 3", 80, 42)],
+            [],
+        ),
+        # A third output gets a key no kept output uses.
+        (
+            [_seg("output1", "Output 1", 0, 80), _seg("output3", "Output 3", 80, 42)],
+            3,
+            [{}, {}, {}],
+            [
+                _seg("output1", "Output 1", 0, 80),
+                _seg("output3", "Output 3", 80, 42),
+                _seg("output4", "Output 3", 122, 50),
+            ],
+            [],
+        ),
+        # Fewer outputs: the dropped one loses its light.
+        (
+            [_seg("output1", "Output 1", 0, 80), _seg("output3", "Output 3", 80, 42)],
+            1,
+            [{}],
+            [_seg("output1", "Output 1", 0, 80)],
+            ["output3", "strip"],
+        ),
+    ],
+    ids=["one-to-two", "port-keys-unchanged", "add-third", "drop-second"],
+)
+async def test_reconfigure_generic_redefines_the_outputs(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    entry_factory: Callable[..., MockConfigEntry],
+    stored: list[dict[str, Any]],
+    outputs: int,
+    submitted: list[dict[str, Any]],
+    expected: list[dict[str, Any]],
+    gone: list[str],
+) -> None:
+    entry = entry_factory(segments=stored)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    def light(key: str) -> str | None:
+        return entity_registry.async_get_entity_id("light", DOMAIN, f"{entry.entry_id}_{key}")
+
+    before = {s["key"]: light(s["key"]) for s in stored}
+    assert None not in before.values()
+
+    result = await entry.start_reconfigure_flow(hass)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"controller_type": "generic"})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"outputs": outputs})
+    result = await _walk_outputs(hass, result, submitted)
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.state is ConfigEntryState.LOADED
+    assert entry.version == 2
+    assert entry.data["segments"] == expected
+    pixel_count = max(s["start"] + s["length"] for s in expected)
+    assert entry.data["pixel_count"] == entry.runtime_data.sender.strip.pixel_count == pixel_count
+    # Kept outputs keep their light (same entity); new ones get one; All outputs exists with more than one output.
+    for key, entity_id in before.items():
+        if key not in gone:
+            assert light(key) == entity_id
+    assert all(light(key) is None for key in gone)
+    assert None not in [light(s["key"]) for s in expected]
+    assert (light("strip") is not None) == (len(expected) > 1)
     assert await hass.config_entries.async_unload(entry.entry_id)

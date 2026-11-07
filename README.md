@@ -14,7 +14,7 @@ All protocol code lives in [aioddp](https://github.com/amattas/aioddp), and Minl
 | Device | Support |
 |---|---|
 | Minleon NDB-Pro with Rainmin RGB+ pixels | The reference device. DDP lights plus the controller device (main light, Color 1-5, Scene), `ddp.recall_preset`, and `ddp.set_colors` |
-| Any other DDP v1 controller (UDP port 4048) | **Generic DDP**: one light per output, or one light for the whole strip. Not tested beyond the DDP spec |
+| Any other DDP v1 controller (UDP port 4048) | **Generic DDP**: one light per output, from the controller's layout or the outputs you define. Not tested beyond the DDP spec |
 
 RGB and RGBW pixels are supported. DDP is send-only, so Home Assistant cannot read a controller's state back over DDP;
 see Known limitations. See [aioddp's compatibility notes](https://github.com/amattas/aioddp/blob/main/docs/compatibility.md)
@@ -24,7 +24,7 @@ for which controllers have been exercised.
 
 | Entity | What it does |
 |---|---|
-| **Output N** light (one per output; **All** for a manually described strip) | On/off, brightness, RGB color (RGBW color for an RGBW entry), the aioddp effects, and multi-color patterns (`ddp.set_pattern`). Sends DDP; its state is assumed. While a controller scene runs it shows on (the scene), and turning it off disables just that output |
+| **Output N** light (one per output; a manually defined output has the name you gave it) | On/off, brightness, RGB color (RGBW color for an RGBW entry), the aioddp effects, and multi-color patterns (`ddp.set_pattern`). Sends DDP; its state is assumed. While a controller scene runs it shows on (the scene), and turning it off disables just that output |
 | **All outputs** light (only when the controller has more than one output) | The same as an output light, over the whole strip: a pattern or effect runs on across the outputs in one DDP frame |
 | **Controller** light (vendor controller types only; the controller device's main entity, named like the device) | On while the controller runs a scene. On brings back the last scene (else the first), also after a restart; brightness is the controller's own intensity (1-100%), and turn_on with a brightness sets it. Off is the controller's `Off` and blanks the DDP lights too. Its `colors` and `background` attributes are the controller's palette (the colors its effects use), set with `ddp.set_colors`; `ddp.recall_preset` plays a stored preset. Polled |
 | **Color 1** to **Color 5** lights (controller device) | One palette slot each; off empties the slot. A Color tab for a custom color (brightness shows 255 and scales the color a turn_on sends) and a Temperature tab from 2700 K (the controller's Warm White) to 6500 K (its Cool White), in between a white mixed from RGB |
@@ -74,15 +74,20 @@ pinned git commits (`aioddp` is not yet published to PyPI).
 3. Home Assistant asks the controller for its output layout (a DDP query, then the controller's own API if its type
    is known to serve one) and checks which kind of controller it is.
 4. Pick the **Controller type**. The detected type is preselected; **Generic DDP** is always offered.
-5. If a layout was found, one light is created per active output ("Output 1", "Output 2", ...). If not, enter the total
-   pixel count and pixel type (RGB or RGBW) and one light covering the whole strip is created.
+5. With a vendor type and a layout found, one light is created per active output ("Output 1", "Output 2", ...). With
+   **Generic DDP**, or when no layout was found, define the outputs yourself (the forms are prefilled from the
+   detected layout, if any): pick the pixel type (RGB = 3 channels per pixel, RGBW = 4) and the number of outputs (1 to 16),
+   then, for each output, a name and its first and last pixel. Pixels count from 1 across the whole controller and
+   both ends are included, so pixels 1-100 and 151-200 make two lights of 100 and 50 pixels. Ranges may leave gaps
+   (those pixels are never driven) but must not overlap. The pixel count is the highest last pixel.
 
 | Field | Step | Notes |
 |---|---|---|
 | Host | Add | IP address or hostname. One entry per host; adding the same host again is refused |
 | Controller type | Add, Reconfigure | Generic DDP or a vendor type (below) |
-| Pixel count | Add (manual only) | Total pixels the controller drives |
-| Pixel type | Add (manual only) | RGB or RGBW (channels per pixel) |
+| Pixel type | Add, Reconfigure (manual only) | RGB (3 channels per pixel) or RGBW (4) |
+| Number of outputs | Add, Reconfigure (manual only) | 1 to 16; one light each |
+| Name, First pixel, Last pixel | Add, Reconfigure (manual only, once per output) | 1-based, inclusive; gaps allowed, overlaps refused |
 
 DDP is send-only UDP with no acknowledgement, so setup can only check that a socket opens. Setup never sends a frame,
 and reloading or removing the integration never blanks the lights.
@@ -105,7 +110,9 @@ shows the stored pixel type and the layout the controller reports now. When it r
 pixel type (RGB or RGBW), outputs, and pixel count; so after switching an NDB-Pro between a 3-channel and a 4-channel
 input mode, reconfigure the entry to follow it. Outputs that are still there keep their lights; an output that is gone
 loses its light (and with a single output left, All outputs goes too). A color order option that does not fit the new
-pixel type is reset to the default. When the controller reports no layout, the stored one is kept.
+pixel type is reset to the default. For **Generic DDP**, or when the controller reports no layout, reconfigure
+continues to the same pixel type, outputs, and per-output steps as adding, prefilled with the stored outputs: change
+the ranges, add or remove outputs (an output that is removed loses its light).
 
 The entry reloads and keeps its devices, entities, and history. Choosing Generic DDP removes the controller device and
 its entities.
