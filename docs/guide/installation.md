@@ -28,14 +28,20 @@
    is known to serve one) and checks which kind of controller it is.
 4. Pick the **Controller type**. The detected type is preselected; **Generic DDP** is always offered.
 5. If a layout was found, one light is created per active output ("Output 1", "Output 2", ...). If not, enter the total
-   pixel count and pixel type (RGB or RGBW) and one light covering the whole strip is created.
+   pixel type (RGB = 3 channels, RGBW = 4) and the number of outputs (1-16), then fill in one form per output: a name,
+   its first pixel and its last pixel (1-based, inclusive, counted across the whole controller). Outputs may not
+   overlap; gaps are allowed. The pixel count is derived from the highest last pixel. When discovery returned a layout
+   the forms are prefilled from it. One light is created per output.
 
 | Field | Step | Notes |
 |---|---|---|
 | Host | Add | IP address or hostname. One entry per host; adding the same host again is refused |
 | Controller type | Add, Reconfigure | Generic DDP or a vendor type (see [Controller types](configuration.md#controller-types)) |
-| Pixel count | Add (manual only) | Total pixels the controller drives |
-| Pixel type | Add (manual only) | RGB or RGBW (channels per pixel) |
+| Pixel type | Add (manual only), Reconfigure | RGB or RGBW (channels per pixel) |
+| Outputs | Add (manual only), Reconfigure | Number of outputs, 1-16 |
+| Output name | Add (manual only), Reconfigure | One per output; names the light |
+| First pixel | Add (manual only), Reconfigure | 1-based, inclusive, across the whole controller. Outputs may not overlap; gaps are allowed |
+| Last pixel | Add (manual only), Reconfigure | Inclusive; the highest one sets the pixel count |
 
 DDP is send-only UDP with no acknowledgement, so setup can only check that a socket opens. Setup never sends a frame,
 and reloading or removing the integration never blanks the lights.
