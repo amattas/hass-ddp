@@ -313,6 +313,17 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
         self._prefill = list(segments)
         self._outputs = min(max(len(segments), 1), MAX_OUTPUTS)
 
+    def _output_key(self, index: int) -> str:
+        """Output ``index``'s segment key: a prefilled output keeps its key (so its light keeps its unique ID); a new
+        one takes the first ``output<N>`` from its position on that no kept or earlier output uses."""
+        if index < len(self._prefill):
+            return str(self._prefill[index][SEGMENT_KEY])
+        used = {s[SEGMENT_KEY] for s in self._prefill[: self._outputs]} | {s[SEGMENT_KEY] for s in self._segments}
+        number = index + 1
+        while f"output{number}" in used:
+            number += 1
+        return f"output{number}"
+
     async def _reconfigure(self, updates: dict[str, Any]) -> ConfigFlowResult | str:
         """Apply ``updates`` to the reconfigured entry and reload it, or the socket check's error key."""
         entry = self._get_reconfigure_entry()
@@ -360,7 +371,7 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
                 errors["base"] = error
             else:
                 segment = {
-                    SEGMENT_KEY: f"output{index + 1}",
+                    SEGMENT_KEY: self._output_key(index),
                     SEGMENT_NAME: user_input[CONF_NAME].strip() or f"Output {index + 1}",
                     SEGMENT_START: first - 1,
                     SEGMENT_LENGTH: last - first + 1,

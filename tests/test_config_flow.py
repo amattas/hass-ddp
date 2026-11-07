@@ -561,37 +561,91 @@ async def test_reconfigure_without_a_layout_prefills_the_stored_one(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+def _seg(key: str, name: str, start: int, length: int) -> dict[str, Any]:
+    return {"key": key, "name": name, "start": start, "length": length}
+
+
+@pytest.mark.parametrize(
+    ("stored", "outputs", "submitted", "expected", "gone"),
+    [
+        # A prefilled output keeps its key (and its light), even renamed and resized; output 2 is new and has no
+        # stored segment, so it defaults to the pixels right after output 1.
+        (
+            [_seg("all", "All", 0, 122)],
+            2,
+            [_output("Left", 1, 60), {"name": "Right", "last_pixel": 130}],
+            [_seg("all", "Left", 0, 60), _seg("output2", "Right", 60, 70)],
+            [],
+        ),
+        # Keys follow the layout's ports (port 2 empty): submitting unchanged keeps output1/output3.
+        (
+            [_seg("output1", "Output 1", 0, 80), _seg("output3", "Output 3", 80, 42)],
+            2,
+            [{}, {}],
+            [_seg("output1", "Output 1", 0, 80), _seg("output3", "Output 3", 80, 42)],
+            [],
+        ),
+        # A third output gets a key no kept output uses.
+        (
+            [_seg("output1", "Output 1", 0, 80), _seg("output3", "Output 3", 80, 42)],
+            3,
+            [{}, {}, {}],
+            [
+                _seg("output1", "Output 1", 0, 80),
+                _seg("output3", "Output 3", 80, 42),
+                _seg("output4", "Output 3", 122, 50),
+            ],
+            [],
+        ),
+        # Fewer outputs: the dropped one loses its light.
+        (
+            [_seg("output1", "Output 1", 0, 80), _seg("output3", "Output 3", 80, 42)],
+            1,
+            [{}],
+            [_seg("output1", "Output 1", 0, 80)],
+            ["output3", "strip"],
+        ),
+    ],
+    ids=["one-to-two", "port-keys-unchanged", "add-third", "drop-second"],
+)
 async def test_reconfigure_generic_redefines_the_outputs(
-    hass: HomeAssistant, entity_registry: er.EntityRegistry, entry_factory: Callable[..., MockConfigEntry]
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    entry_factory: Callable[..., MockConfigEntry],
+    stored: list[dict[str, Any]],
+    outputs: int,
+    submitted: list[dict[str, Any]],
+    expected: list[dict[str, Any]],
+    gone: list[str],
 ) -> None:
-    entry = entry_factory(segments=[{"key": "all", "name": "All", "start": 0, "length": 122}])
+    entry = entry_factory(segments=stored)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
 
     def light(key: str) -> str | None:
         return entity_registry.async_get_entity_id("light", DOMAIN, f"{entry.entry_id}_{key}")
 
-    assert light("all") is not None
-    assert light("strip") is None
+    before = {s["key"]: light(s["key"]) for s in stored}
+    assert None not in before.values()
 
     result = await entry.start_reconfigure_flow(hass)
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"controller_type": "generic"})
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"outputs": 2})
-    # Output 2 has no stored segment: it defaults to the pixels right after output 1.
-    result = await _walk_outputs(hass, result, [_output("Left", 1, 60), {"name": "Right", "last_pixel": 130}])
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"outputs": outputs})
+    result = await _walk_outputs(hass, result, submitted)
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
     assert entry.state is ConfigEntryState.LOADED
     assert entry.version == 2
-    assert entry.data["pixel_count"] == 130
-    assert entry.data["segments"] == [
-        {"key": "output1", "name": "Left", "start": 0, "length": 60},
-        {"key": "output2", "name": "Right", "start": 60, "length": 70},
-    ]
-    assert entry.runtime_data.sender.strip.pixel_count == 130
-    # A light per output and All outputs; the old "all" segment's light is gone.
-    assert light("all") is None
-    assert None not in (light("output1"), light("output2"), light("strip"))
+    assert entry.data["segments"] == expected
+    pixel_count = max(s["start"] + s["length"] for s in expected)
+    assert entry.data["pixel_count"] == entry.runtime_data.sender.strip.pixel_count == pixel_count
+    # Kept outputs keep their light (same entity); new ones get one; All outputs exists with more than one output.
+    for key, entity_id in before.items():
+        if key not in gone:
+            assert light(key) == entity_id
+    assert all(light(key) is None for key in gone)
+    assert None not in [light(s["key"]) for s in expected]
+    assert (light("strip") is not None) == (len(expected) > 1)
     assert await hass.config_entries.async_unload(entry.entry_id)
