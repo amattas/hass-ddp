@@ -59,7 +59,9 @@ def test_every_used_key_is_translated() -> None:
     assert used["selector"] <= set(strings["selector"])
     for platform, keys in platforms.items():
         assert keys <= set(strings["entity"][platform]), platform
-    assert {"cannot_connect", "invalid_config"} <= set(strings["config"]["error"])  # config flow errors
+    assert {"cannot_connect", "invalid_config", "invalid_range", "output_overlap"} <= set(
+        strings["config"]["error"]
+    )  # config flow errors
     assert {"already_configured", "reconfigure_successful"} <= set(strings["config"]["abort"])
     assert "invalid_keepalive" in strings["options"]["error"]
     assert all("message" in strings["exceptions"][k] for k in used["exception"])

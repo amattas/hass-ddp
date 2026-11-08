@@ -14,7 +14,7 @@ All protocol code lives in [aioddp](https://github.com/amattas/aioddp), and Minl
 | Device | Support |
 |---|---|
 | Minleon NDB-Pro with Rainmin RGB+ pixels | The reference device. DDP lights plus the controller device (main light, Color 1-5, Scene), `ddp.recall_preset`, and `ddp.set_colors` |
-| Any other DDP v1 controller (UDP port 4048) | **Generic DDP**: one light per output, or one light for the whole strip. Not tested beyond the DDP spec |
+| Any other DDP v1 controller (UDP port 4048) | **Generic DDP**: one light per output, from the controller's layout or the outputs you define. Not tested beyond the DDP spec |
 
 RGB and RGBW pixels are supported. DDP is send-only, so Home Assistant cannot read a controller's state back over DDP;
 see Known limitations. See [aioddp's compatibility notes](https://github.com/amattas/aioddp/blob/main/docs/compatibility.md)
@@ -24,10 +24,10 @@ for which controllers have been exercised.
 
 | Entity | What it does |
 |---|---|
-| **Output N** light (one per output; **All** for a manually described strip) | On/off, brightness, RGB color (RGBW color for an RGBW entry), the aioddp effects, and multi-color patterns (`ddp.set_pattern`). Sends DDP; its state is assumed. While a controller scene runs it shows on (the scene), and turning it off disables just that output |
+| **Output N** light (one per output; a manually defined output has the name you gave it) | On/off, brightness, RGB color (RGBW color for an RGBW entry), the aioddp effects, and multi-color patterns (`ddp.set_pattern`). Sends DDP; its state is assumed. While a controller scene runs it shows on (the scene), and turning it off disables just that output |
 | **All outputs** light (only when the controller has more than one output) | The same as an output light, over the whole strip: a pattern or effect runs on across the outputs in one DDP frame |
 | **Controller** light (vendor controller types only; the controller device's main entity, named like the device) | On while the controller runs a scene. On brings back the last scene (else the first), also after a restart; brightness is the controller's own intensity (1-100%), and turn_on with a brightness sets it. Off is the controller's `Off` and blanks the DDP lights too. Its `colors` and `background` attributes are the controller's palette (the colors its effects use), set with `ddp.set_colors`; `ddp.recall_preset` plays a stored preset. Polled |
-| **Color 1** to **Color 5** lights (controller device) | One palette slot each; off empties the slot. A Color tab for a custom color (brightness shows 255 and scales the color a turn_on sends) and a Temperature tab for the controller's white LEDs: warm (2700 K) or cool (6500 K) |
+| **Color 1** to **Color 5** lights (controller device) | One palette slot each; off empties the slot. A Color tab for a custom color (brightness shows 255 and scales the color a turn_on sends) and a Temperature tab from 2700 K (the controller's Warm White) to 6500 K (its Cool White), in between a white mixed from RGB |
 | **Scene** select (controller device) | The controller's built-in effects and shows; the running one is selected, none while it is `Off`. Selecting one runs it and hands the pixels back from DDP |
 
 **RGBW.** When the entry's pixel type is RGBW (the controller reports 4-channel input, or you chose RGBW when
@@ -74,15 +74,20 @@ pinned git commits (`aioddp` is not yet published to PyPI).
 3. Home Assistant asks the controller for its output layout (a DDP query, then the controller's own API if its type
    is known to serve one) and checks which kind of controller it is.
 4. Pick the **Controller type**. The detected type is preselected; **Generic DDP** is always offered.
-5. If a layout was found, one light is created per active output ("Output 1", "Output 2", ...). If not, enter the total
-   pixel count and pixel type (RGB or RGBW) and one light covering the whole strip is created.
+5. With a vendor type and a layout found, one light is created per active output ("Output 1", "Output 2", ...). With
+   **Generic DDP**, or when no layout was found, define the outputs yourself (the forms are prefilled from the
+   detected layout, if any): pick the pixel type (RGB = 3 channels per pixel, RGBW = 4) and the number of outputs (1 to 16),
+   then, for each output, a name and its first and last pixel. Pixels count from 1 across the whole controller and
+   both ends are included, so pixels 1-100 and 151-200 make two lights of 100 and 50 pixels. Ranges may leave gaps
+   (those pixels are never driven) but must not overlap. The pixel count is the highest last pixel.
 
 | Field | Step | Notes |
 |---|---|---|
 | Host | Add | IP address or hostname. One entry per host; adding the same host again is refused |
 | Controller type | Add, Reconfigure | Generic DDP or a vendor type (below) |
-| Pixel count | Add (manual only) | Total pixels the controller drives |
-| Pixel type | Add (manual only) | RGB or RGBW (channels per pixel) |
+| Pixel type | Add, Reconfigure (manual only) | RGB (3 channels per pixel) or RGBW (4) |
+| Number of outputs | Add, Reconfigure (manual only) | 1 to 16; one light each |
+| Name, First pixel, Last pixel | Add, Reconfigure (manual only, once per output) | 1-based, inclusive; gaps allowed, overlaps refused |
 
 DDP is send-only UDP with no acknowledgement, so setup can only check that a socket opens. Setup never sends a frame,
 and reloading or removing the integration never blanks the lights.
@@ -105,7 +110,9 @@ shows the stored pixel type and the layout the controller reports now. When it r
 pixel type (RGB or RGBW), outputs, and pixel count; so after switching an NDB-Pro between a 3-channel and a 4-channel
 input mode, reconfigure the entry to follow it. Outputs that are still there keep their lights; an output that is gone
 loses its light (and with a single output left, All outputs goes too). A color order option that does not fit the new
-pixel type is reset to the default. When the controller reports no layout, the stored one is kept.
+pixel type is reset to the default. For **Generic DDP**, or when the controller reports no layout, reconfigure
+continues to the same pixel type, outputs, and per-output steps as adding, prefilled with the stored outputs: change
+the ranges, add or remove outputs (an output that is removed loses its light).
 
 The entry reloads and keeps its devices, entities, and history. Choosing Generic DDP removes the controller device and
 its entities.
@@ -184,8 +191,10 @@ keep their entity IDs (for example `light.ndbpro_minleon_ndb_pro` and `light.ndb
 - **Color 1** to **Color 5** set one palette slot each, read back by the same 30 s poll. A Color N light has a Color
   tab and a Temperature tab, the white picker; it shows the tab the slot reads: `#c69740` (how the controller reports
   Warm White once set) or `#ffffff` is Warm White, `#feffff` is Cool White, anything else is a color. A color sets the
-  slot to it (scaled by a brightness); a temperature sets a white, sent exact: up to 4600 K Warm White (shown as
-  2700 K), above it Cool White (shown as 6500 K). Off empties the slot. A bare turn_on re-sends the slot's last color,
+  slot to it (scaled by a brightness). A temperature of 2700 K sets Warm White and 6500 K Cool White, sent exact
+  (beyond either end counts as that end); in between it sets Home Assistant's RGB for that temperature (scaled by a
+  brightness), which the controller converts to its pixels like any color and which then reads back as a color, on
+  the Color tab. Off empties the slot. A bare turn_on re-sends the slot's last color,
   a white included, also after a restart, red by default. A color of pure white `#ffffff` reads back as Warm White.
   Like `ddp.set_colors`, a slot change leaves DDP alone. Upgrading from 0.3: the `Cool White` and `Warm White`
   effects of Color N are gone; use the Temperature tab. Upgrading from 0.4.1: the Mode 1 to 5 selects are removed
@@ -374,7 +383,7 @@ Red, white, and blue blocks of five pixels on one output, then a moving version 
 | `ddp.set_pattern` | An output light or All outputs | `colors` (required: 1-16 colors, each `[r, g, b]` 0-255, or `[r, g, b, w]` on an RGBW entry with `palette`), `block_size` (pixels per color block, default 1; palette only), `effect` (`palette` by default, or `chase`, `breathe`, `twinkle`), `params` (the effect's other parameters, for example `{"speed": 4}`), `brightness` (1-255) |
 | `ddp.recall_preset` | The controller light | `preset` (1-20; 1-10 are slots of Show 1, 11-20 of Show 2) |
 | `ddp.set_colors` | The controller light | `colors` (required: 0-5 colors for palette slots 1-5, each `[r, g, b]` 0-255 or `cool_white` / `warm_white`; the remaining slots are emptied, and an empty list lets the controller pick random colors), `background` (`[r, g, b]`; left as it is when omitted) |
-| `light.turn_on` / `light.turn_off` | Any light of this integration | Segment lights: `brightness`, `rgb_color` (`rgbw_color` on an RGBW entry), `effect`. Color 1-5: `rgb_color` and `brightness` (scales the color), or `color_temp_kelvin` (up to 4600 Warm White, above Cool White) |
+| `light.turn_on` / `light.turn_off` | Any light of this integration | Segment lights: `brightness`, `rgb_color` (`rgbw_color` on an RGBW entry), `effect`. Color 1-5: `rgb_color` and `brightness` (scales the color), or `color_temp_kelvin` (2700 Warm White, 6500 Cool White, in between its RGB, scaled by `brightness`) |
 | `light.turn_on` / `light.turn_off`, `select.select_option` | Controller light, Scene | Controller light: `brightness` (sets the intensity, 1-100%; none: on is the last scene). Scene: `option` (one of the controller's effects) |
 
 `ddp.set_pattern` on a Color light is refused. `ddp.recall_preset` and `ddp.set_colors` act only on the controller light;
