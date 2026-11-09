@@ -188,8 +188,8 @@ rules:
     comment: |
       All outputs, Color 1-5 ("Color {slot}"), and Scene
       are named by translation; the controller light takes
-      the device's name. Segment lights carry the output label read from the
-      controller's layout and stored with the entry (Output 1, All), which is device data rather than a fixed string.
+      the device's name. Segment lights carry the output name entered in the flow (prefilled from the
+      controller's layout) and stored with the entry (Output 1, All), which is user data rather than a fixed string.
   exception-translations:
     status: done
     comment: Every raised exception uses a translation_key from strings.json (tests/test_metadata.py checks).
@@ -213,9 +213,9 @@ rules:
   stale-devices:
     status: done
     comment: |
-      Reconfiguring to Generic DDP removes the controller device with its entities; a reconfigure whose layout
-      lost an output removes that output's light (and All outputs once one output is left). The DDP device goes away
-      with the entry.
+      Reconfiguring to Generic DDP removes the controller device with its entities; a reconfigure that drops an
+      output (the layout lost it, or the user removed it in the output steps) removes that output's light (and All
+      outputs once one output is left). The DDP device goes away with the entry.
 
   # Platinum
   async-dependency:
