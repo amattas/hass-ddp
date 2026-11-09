@@ -175,3 +175,24 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
   identifiers follow the host, a color order of the other data type is dropped). An output whose key disappears loses
   its light through the existing stale-entity pruning (an output removed by lowering the count, for example); an old
   manual entry's "all" segment stays as output 1's key.
+
+## 2026-11-09: Every controller type defines its outputs in the flow
+
+- Decision: adding and reconfiguring walk the manual (pixel type + number of outputs) and output (name, first and
+  last pixel) steps for every controller type, not only Generic DDP or a vendor type without a layout. A vendor
+  entry's "<title> Generic DDP" device is configured the same way as a Generic entry.
+- Why: the DDP lights are the same for every type, and users want to address specific pixels (split a port into
+  several lights, leave pixels undriven) on a vendor controller too. Creating the entry straight from the layout gave
+  them no way to do that.
+- Adding: the steps are prefilled from the detected layout when there is one (pixel type, outputs, "Output N" names,
+  ranges); the layout's title and device info are kept, so submitting the forms unchanged stores what the old direct
+  path stored. Without a layout the forms show the defaults, as before.
+- Reconfigure: a vendor type re-reads the layout and prefills the steps from it (its data type and segments), but an
+  output whose key matches a stored segment keeps the stored name (the user may have renamed it); the layout's
+  manufacturer, model and firmware are stored on the final update. Generic DDP, or a vendor type that reports no
+  layout, prefills from the stored data type and segments, as before. The socket check now runs on the last output
+  step for every path, so an unreachable host re-shows that form.
+- Keys: unchanged rules. A prefilled output keeps its segment key (the layout's segment names, e.g. `output1`), so its
+  light keeps its unique ID; an output beyond the prefilled ones gets the first free `output<N>` from its position.
+- For a vendor type the ranges should normally match the controller's own port setup, since the controller maps the
+  DDP channels to its ports; the forms say so, but the flow does not enforce it.

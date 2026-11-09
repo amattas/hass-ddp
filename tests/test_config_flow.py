@@ -95,6 +95,9 @@ async def test_discovered_controller_creates_entry(hass: HomeAssistant, flow_con
     assert [o["value"] for o in selector.config["options"]] == ["generic", "ndbpro"]  # Generic is always offered
 
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["step_id"] == "manual"  # a vendor type defines its outputs too, prefilled from the layout
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    result = await _walk_outputs(hass, result, [{}, {}])
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
@@ -117,15 +120,23 @@ async def test_discovered_controller_creates_entry(hass: HomeAssistant, flow_con
 
 
 @pytest.mark.parametrize(
-    ("offline", "ddp_layout", "choice", "default", "expected"),
+    ("offline", "ddp_layout", "choice", "default", "expected", "second", "second_length"),
     [
-        (False, True, None, "ndbpro", "ndbpro"),
-        (False, False, None, "ndbpro", "ndbpro"),  # DDP is silent: the layout comes from the NDB-Pro's HTTP API
-        (True, True, None, "generic", "generic"),
-        (False, True, "generic", "ndbpro", "generic"),  # the user overrides the detected type
-        (True, True, "ndbpro", "generic", "ndbpro"),  # ... or picks a vendor type detection missed
+        (False, True, None, "ndbpro", "ndbpro", {}, 42),
+        (False, False, None, "ndbpro", "ndbpro", {}, 42),  # DDP is silent: the layout comes from the NDB-Pro's HTTP API
+        (True, True, None, "generic", "generic", {}, 42),
+        (False, True, "generic", "ndbpro", "generic", {}, 42),  # the user overrides the detected type
+        (True, True, "ndbpro", "generic", "ndbpro", {}, 42),  # ... or picks a vendor type detection missed
+        (False, True, None, "ndbpro", "ndbpro", {"last_pixel": 100}, 20),  # a vendor type's output edited
     ],
-    ids=["detected-ndbpro", "http-layout", "detected-generic", "override-to-generic", "override-to-ndbpro"],
+    ids=[
+        "detected-ndbpro",
+        "http-layout",
+        "detected-generic",
+        "override-to-generic",
+        "override-to-ndbpro",
+        "ndbpro-shortened",
+    ],
 )
 async def test_controller_type_is_preselected_and_overridable(
     hass: HomeAssistant,
@@ -135,6 +146,8 @@ async def test_controller_type_is_preselected_and_overridable(
     choice: str | None,
     default: str,
     expected: str,
+    second: dict[str, Any],
+    second_length: int,
 ) -> None:
     flow_controller.offline = offline
     layout = parse_config(NDB_CONFIG, host=HOST, source="ddp", status=NDB_STATUS) if ddp_layout else None
@@ -145,23 +158,23 @@ async def test_controller_type_is_preselected_and_overridable(
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {"controller_type": choice} if choice else {}
     )
-    if expected == "generic":  # Generic DDP takes the outputs from the user, prefilled from the detected layout
-        assert result["step_id"] == "manual"
-        assert result["data_schema"]({}) == {"data_type": "rgb", "outputs": 2}  # type: ignore[misc]
-        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-        assert result["data_schema"]({}) == {"name": "Output 1", "first_pixel": 1, "last_pixel": 80}  # type: ignore[misc]
-        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-        assert result["data_schema"]({}) == {"name": "Output 2", "first_pixel": 81, "last_pixel": 122}  # type: ignore[misc]
-        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    # Every controller type takes the outputs from the user, prefilled from the detected layout.
+    assert result["step_id"] == "manual"
+    assert result["data_schema"]({}) == {"data_type": "rgb", "outputs": 2}  # type: ignore[misc]
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["data_schema"]({}) == _output("Output 1", 1, 80)  # type: ignore[misc]
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["data_schema"]({}) == _output("Output 2", 81, 122)  # type: ignore[misc]
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], second)
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert result["title"] != HOST  # the layout's title and device info, Generic DDP included
+    assert result["title"] != HOST  # the layout's title and device info, whatever the type
     assert result["data"]["model"] is not None
     assert result["data"]["controller_type"] == expected
     assert result["data"]["segments"] == [
         {"key": "output1", "name": "Output 1", "start": 0, "length": 80},
-        {"key": "output2", "name": "Output 2", "start": 80, "length": 42},
+        {"key": "output2", "name": "Output 2", "start": 80, "length": second_length},
     ]
-    assert result["data"]["pixel_count"] == 122
+    assert result["data"]["pixel_count"] == 80 + second_length
 
 
 MONO_CONFIG = {"config": {"conv": 3, "ports": [{"p": 0, "l": 10, "ss": 1}]}}
@@ -275,16 +288,19 @@ async def test_socket_check_errors(hass: HomeAssistant, discovered: bool, pixel_
     layout = parse_config(NDB_CONFIG, host=HOST, source="ddp", status=NDB_STATUS) if discovered else None
     with patch(OPEN, side_effect=DDPSendError("no route")):
         result = await _enter_host(hass, layout)
-        # Detection finds Generic here; the user picks NDB-Pro and the re-shown form must keep that choice.
+        # Detection finds Generic here; the user picks NDB-Pro, then confirms the outputs.
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {"controller_type": "ndbpro"})
-        if not discovered:
+        assert result["step_id"] == "manual"
+        if discovered:  # the forms are prefilled from the layout
+            result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+            result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+            result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        else:
             result = await hass.config_entries.flow.async_configure(result["flow_id"], {"outputs": 1})
             result = await hass.config_entries.flow.async_configure(result["flow_id"], _output("A", 1, pixel_count))
     assert result["type"] is FlowResultType.FORM
-    assert result["step_id"] == ("controller" if discovered else "output")
+    assert result["step_id"] == "output"
     assert result["errors"] == {"base": error}
-    if discovered:
-        assert _default_type(result) == "ndbpro"
 
 
 async def test_duplicate_host_aborts(hass: HomeAssistant) -> None:
@@ -368,10 +384,10 @@ async def test_reconfigure_changes_controller_type_and_reloads(
 
     stored = entry.data["segments"]
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"controller_type": target})
-    if target == "generic":  # Generic DDP always takes the outputs from the user, prefilled from the entry
-        assert result["step_id"] == "manual"
-        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-        result = await _walk_outputs(hass, result, [{}, {}])
+    # Every type confirms the outputs: Generic DDP prefilled from the entry, NDB-Pro from the layout it reports.
+    assert result["step_id"] == "manual"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    result = await _walk_outputs(hass, result, [{}, {}])
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.ABORT
@@ -496,7 +512,8 @@ async def test_reconfigure_rereads_the_layout(
     kept_options: dict[str, Any],
 ) -> None:
     flow_controller.offline = False
-    entry = entry_factory(controller=flow_controller, options=options)
+    stored = [_seg("output1", "Roof", 0, 80), _seg("output2", "Output 2", 80, 42)]  # output 1 renamed by the user
+    entry = entry_factory(controller=flow_controller, options=options, segments=stored)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     before = {
@@ -511,18 +528,28 @@ async def test_reconfigure_rereads_the_layout(
     assert result["description_placeholders"]["layout"] == (  # type: ignore[index]
         f"{data_type}, {len(keys)} output{'s' if len(keys) > 1 else ''}, {80 if len(keys) == 1 else 122} pixels"
     )
-    with patch(OPEN, side_effect=DDPSendError("no route")):  # an unreachable host re-shows the form, nothing stored
-        result = await hass.config_entries.flow.async_configure(result["flow_id"], {"controller_type": "ndbpro"})
-    assert (result["step_id"], result["errors"]) == ("reconfigure", {"base": "cannot_connect"})
-    assert entry.data["data_type"] == "rgb"
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"controller_type": "ndbpro"})
+    # The output steps are prefilled from the layout read now, keeping the stored name of a matching key.
+    assert result["step_id"] == "manual"
+    assert result["data_schema"]({}) == {"data_type": data_type, "outputs": len(keys)}  # type: ignore[misc]
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    defaults = [_output("Roof", 1, 80), _output("Output 2", 81, 122)][: len(keys)]
+    for default in defaults[:-1]:
+        assert result["data_schema"]({}) == default  # type: ignore[misc]
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["data_schema"]({}) == defaults[-1]  # type: ignore[misc]
+    with patch(OPEN, side_effect=DDPSendError("no route")):  # an unreachable host re-shows the form, nothing stored
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert (result["step_id"], result["errors"]) == ("output", {"base": "cannot_connect"})
+    assert entry.data["data_type"] == "rgb"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
     assert entry.state is ConfigEntryState.LOADED
     assert entry.data["data_type"] == data_type
-    assert [s["key"] for s in entry.data["segments"]] == keys
+    assert entry.data["segments"] == stored[: len(keys)]
     assert entry.data["pixel_count"] == (122 if len(keys) > 1 else 80)
     assert (entry.data["manufacturer"], entry.data["model"], entry.data["firmware"]) == ("3WL", "NDBPRO", "2.0")
     assert entry.options == kept_options

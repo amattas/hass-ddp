@@ -14,7 +14,7 @@ in the controller type registry (`custom_components/ddp/controller.py`) backed b
 
 The entry's pixel type (RGB or RGBW) decides every DDP light's color mode: RGBW entries use `rgbw_color`. An NDB-Pro
 reports it from its input mode, so it must be set to a 4-channel mode in its own UI for the entry to be RGBW; then
-**Reconfigure** the entry to re-read the layout (pixel count, type, and outputs). Reconfigure walks the same pixel type, outputs and per-output steps as manual setup, prefilled from the stored layout; this applies to Generic DDP always, and to a vendor type only when it reports no layout. An unchanged output keeps its light. Details are in
+**Reconfigure** the entry to re-read the layout (pixel count, type, and outputs). Reconfigure always walks the same pixel type, outputs and per-output steps as setup, prefilled from the layout the controller reports now (keeping the names you gave the outputs), or from the stored layout for Generic DDP or when it reports none. An unchanged output keeps its light. Details are in
 [RGBW](entities.md#rgbw).
 
 ## Options

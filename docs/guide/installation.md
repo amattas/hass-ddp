@@ -27,21 +27,22 @@
 3. Home Assistant asks the controller for its output layout (a DDP query, then the controller's own API if its type
    is known to serve one) and checks which kind of controller it is.
 4. Pick the **Controller type**. The detected type is preselected; **Generic DDP** is always offered.
-5. If a layout was found, one light is created per active output ("Output 1", "Output 2", ...). If not, enter the total
-   pixel type (RGB = 3 channels, RGBW = 4) and the number of outputs (1-16), then fill in one form per output: a name,
-   its first pixel and its last pixel (1-based, inclusive, counted across the whole controller). Outputs may not
-   overlap; gaps are allowed. The pixel count is derived from the highest last pixel. When discovery returned a layout
-   the forms are prefilled from it. One light is created per output.
+5. Whatever the type, define the outputs: the pixel type (RGB = 3 channels, RGBW = 4) and the number of outputs
+   (1-16), then one form per output: a name, its first pixel and its last pixel (1-based, inclusive, counted across
+   the whole controller). Outputs may not overlap; gaps are allowed. The pixel count is derived from the highest last
+   pixel. When the controller reports a layout the forms are prefilled from it ("Output 1", "Output 2", ... over its
+   active outputs), so you can submit them unchanged. With a vendor type, keep the ranges in line with the
+   controller's own port setup: the controller maps the DDP channels to its ports. One light is created per output.
 
 | Field | Step | Notes |
 |---|---|---|
 | Host | Add | IP address or hostname. One entry per host; adding the same host again is refused |
 | Controller type | Add, Reconfigure | Generic DDP or a vendor type (see [Controller types](configuration.md#controller-types)) |
-| Pixel type | Add (manual only), Reconfigure | RGB or RGBW (channels per pixel) |
-| Outputs | Add (manual only), Reconfigure | Number of outputs, 1-16 |
-| Output name | Add (manual only), Reconfigure | One per output; names the light |
-| First pixel | Add (manual only), Reconfigure | 1-based, inclusive, across the whole controller. Outputs may not overlap; gaps are allowed |
-| Last pixel | Add (manual only), Reconfigure | Inclusive; the highest one sets the pixel count |
+| Pixel type | Add, Reconfigure | RGB or RGBW (channels per pixel) |
+| Outputs | Add, Reconfigure | Number of outputs, 1-16 |
+| Output name | Add, Reconfigure | One per output; names the light |
+| First pixel | Add, Reconfigure | 1-based, inclusive, across the whole controller. Outputs may not overlap; gaps are allowed |
+| Last pixel | Add, Reconfigure | Inclusive; the highest one sets the pixel count |
 
 DDP is send-only UDP with no acknowledgement, so setup can only check that a socket opens. Setup never sends a frame,
 and reloading or removing the integration never blanks the lights.
@@ -50,11 +51,14 @@ and reloading or removing the integration never blanks the lights.
 
 **Reconfigure** on the integration entry changes the host (for example after a new DHCP lease) or the controller type,
 and re-reads the output layout the same way adding does (a DDP query, then the controller type's own API). The form
-shows the stored pixel type and the layout the controller reports now. When it reports one, the entry stores its
-pixel type (RGB or RGBW), outputs, and pixel count; so after switching an NDB-Pro between a 3-channel and a 4-channel
-input mode, reconfigure the entry to follow it. Outputs that are still there keep their lights; an output that is gone
-loses its light (and with a single output left, All outputs goes too). A color order option that does not fit the new
-pixel type is reset to the default. When the controller reports no layout, the stored one is kept.
+shows the stored pixel type and the layout the controller reports now. Submitting always continues to the same pixel
+type, outputs, and per-output steps as adding. When the controller reports a layout they are prefilled from it (its
+pixel type, outputs and ranges, keeping the names you gave the outputs), and its device info is stored; so after
+switching an NDB-Pro between a 3-channel and a 4-channel input mode, reconfigure the entry to follow it. For
+**Generic DDP**, or when the controller reports no layout, they are prefilled with the stored outputs. Change the
+ranges, add or remove outputs: outputs that are still there keep their lights; an output that is gone loses its light
+(and with a single output left, All outputs goes too). A color order option that does not fit the new pixel type is
+reset to the default.
 
 The entry reloads and keeps its devices, entities, and history. Choosing Generic DDP removes the controller device and
 its entities.
