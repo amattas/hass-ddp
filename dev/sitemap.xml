@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url>
+        <loc>https://amattas.github.io/hass-ddp/dev/</loc>
+      </url>
+      <url>
+        <loc>https://amattas.github.io/hass-ddp/dev/guide/configuration/</loc>
+      </url>
+      <url>
+        <loc>https://amattas.github.io/hass-ddp/dev/guide/entities/</loc>
+      </url>
+      <url>
+        <loc>https://amattas.github.io/hass-ddp/dev/guide/installation/</loc>
+      </url>
+</urlset>
