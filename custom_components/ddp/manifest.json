@@ -13,5 +13,5 @@
     "aioddp@git+https://github.com/amattas/aioddp.git@48cfc5c60f1db469ea9467c6d2b77fe72cab6b47",
     "pyminleon@git+https://github.com/amattas/pyminleon.git@eb56e3ad1d19323242e03bf4fbb84dab288a7004"
   ],
-  "version": "0.5.0"
+  "version": "0.5.1"
 }
