@@ -1,4 +1,4 @@
-"""Config and options flows: discover the controller's layout, pick its controller type, else ask for the outputs."""
+"""Config and options flows: discover the controller's layout, pick its controller type, then define the outputs."""
 
 from __future__ import annotations
 
@@ -189,6 +189,11 @@ def _describe(data: dict[str, Any] | None) -> str:
     return f"{data[CONF_DATA_TYPE]}, {outputs} output{'s' if outputs != 1 else ''}, {data[CONF_PIXEL_COUNT]} pixels"
 
 
+def _device_info(data: dict[str, Any]) -> dict[str, Any]:
+    """The device info (manufacturer, model, firmware) of a layout's entry data."""
+    return {key: data[key] for key in (CONF_MANUFACTURER, CONF_MODEL, CONF_FIRMWARE)}
+
+
 def _title(layout: ControllerLayout, host: str) -> str:
     status = layout.status or {}
     name = status.get("name")
@@ -213,7 +218,7 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
         self._outputs = 1
         self._segments: list[dict[str, Any]] = []
         self._prefill: list[dict[str, Any]] = []
-        # A Generic DDP entry built over a detected layout keeps that layout's title and device info.
+        # An entry built over a detected or re-read layout keeps that layout's title (when added) and device info.
         self._title = ""
         self._device_info: dict[str, Any] = {}
 
@@ -231,63 +236,53 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_controller(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Pick the controller type, the detected one preselected; Generic DDP is always offered.
 
-        A vendor type with a usable layout creates the entry from it. Generic DDP, or no usable layout, continues to
-        the manual and output steps, prefilled from the detected layout when there is one.
+        Every type continues to the manual and output steps, prefilled from the detected layout when there is one
+        (its title and device info are kept), so a vendor entry's DDP device is defined like a Generic one.
         """
-        errors: dict[str, str] = {}
         if user_input is not None:
             self._controller_type = user_input[CONF_CONTROLLER_TYPE]
-            layout = self._layout
-            data = _layout_data(layout)
-            if layout is None or data is None or self._controller_type == TYPE_GENERIC:
-                if layout is not None and data is not None:
-                    self._prefill_from(data[CONF_DATA_TYPE], data[CONF_SEGMENTS])
-                    self._title = _title(layout, self._host)
-                    self._device_info = {key: data[key] for key in (CONF_MANUFACTURER, CONF_MODEL, CONF_FIRMWARE)}
-                return await self.async_step_manual()
-            if not (error := await _check_socket(self._host, data[CONF_PIXEL_COUNT], data[CONF_DATA_TYPE])):
-                return self.async_create_entry(
-                    title=_title(layout, self._host),
-                    data={CONF_HOST: self._host, **data, CONF_CONTROLLER_TYPE: self._controller_type},
-                )
-            errors["base"] = error
+            if self._layout is not None and (data := _layout_data(self._layout)) is not None:
+                self._prefill_from(data[CONF_DATA_TYPE], data[CONF_SEGMENTS])
+                self._title = _title(self._layout, self._host)
+                self._device_info = _device_info(data)
+            return await self.async_step_manual()
         return self.async_show_form(
             step_id="controller",
-            data_schema=_controller_schema(self._controller_type if user_input is not None else self._detected),
+            data_schema=_controller_schema(self._detected),
             description_placeholders={CONTROLLER_PLACEHOLDER: CONTROLLER_TYPES[self._detected].label},
-            errors=errors,
         )
 
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Change the host or the controller type later, and re-read the layout; the entry reloads.
+        """Change the host or the controller type later, then redefine the outputs; the entry reloads.
 
-        A usable layout replaces the stored one (data type, outputs, pixel count, device info), so switching the
-        controller between 3- and 4-channel input takes effect. Generic DDP, or a type that gives no layout, walks the
-        manual and output steps instead, prefilled from the stored outputs.
+        A vendor type re-reads the layout and prefills the manual and output steps from it (data type, outputs), so
+        switching the controller between 3- and 4-channel input takes effect; an output whose key is stored keeps its
+        stored name, and the layout's device info is stored. Generic DDP, or a type that gives no layout, prefills
+        them from the stored data type and outputs.
         """
         entry = self._get_reconfigure_entry()
         http_port = entry.data.get(CONF_HTTP_PORT, DEFAULT_HTTP_PORT)
-        errors: dict[str, str] = {}
         if user_input is not None:
             host = user_input[CONF_HOST].strip()
-            moved = host != entry.data[CONF_HOST]
-            if moved:
+            if host != entry.data[CONF_HOST]:
                 await self.async_set_unique_id(host)
                 self._abort_if_unique_id_configured()
-            controller_type = user_input[CONF_CONTROLLER_TYPE]
+            self._host, self._controller_type = host, user_input[CONF_CONTROLLER_TYPE]
             layout = None
-            if controller_type != TYPE_GENERIC:
-                layout = _layout_data(await _read_layout(host, controller_type, http_port))
+            if self._controller_type != TYPE_GENERIC:
+                layout = _layout_data(await _read_layout(host, self._controller_type, http_port))
             if layout is None:
-                self._host, self._controller_type = host, controller_type
                 self._prefill_from(entry.data[CONF_DATA_TYPE], entry.data[CONF_SEGMENTS])
-                return await self.async_step_manual()
-            result = await self._reconfigure({CONF_HOST: host, CONF_CONTROLLER_TYPE: controller_type, **layout})
-            if not isinstance(result, str):
-                return result
-            errors["base"] = result
-        host = user_input[CONF_HOST].strip() if user_input is not None else entry.data[CONF_HOST]
-        chosen = user_input[CONF_CONTROLLER_TYPE] if user_input is not None else entry.data[CONF_CONTROLLER_TYPE]
+            else:
+                names = {s[SEGMENT_KEY]: s[SEGMENT_NAME] for s in entry.data[CONF_SEGMENTS]}
+                segments = [
+                    {**s, SEGMENT_NAME: names.get(s[SEGMENT_KEY], s[SEGMENT_NAME])} for s in layout[CONF_SEGMENTS]
+                ]
+                self._prefill_from(layout[CONF_DATA_TYPE], segments)
+                self._device_info = _device_info(layout)
+            return await self.async_step_manual()
+        host = entry.data[CONF_HOST]
+        chosen = entry.data[CONF_CONTROLLER_TYPE]
         detected = await detect(host, http_port)
         layout = _layout_data(await _read_layout(host, chosen, http_port))
         schema = probatio.Schema(
@@ -304,7 +299,6 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
                 DATA_TYPE_PLACEHOLDER: entry.data[CONF_DATA_TYPE],
                 LAYOUT_PLACEHOLDER: _describe(layout),
             },
-            errors=errors,
         )
 
     def _prefill_from(self, data_type: str, segments: list[dict[str, Any]]) -> None:
@@ -353,7 +347,7 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
         )
 
     async def async_step_manual(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """No usable layout (or Generic DDP on reconfigure): ask for the pixel type and the number of outputs."""
+        """Ask for the pixel type and the number of outputs, prefilled from the detected or stored layout."""
         if user_input is not None:
             self._data_type = user_input[CONF_DATA_TYPE]
             self._outputs = int(user_input[CONF_OUTPUTS])
@@ -386,7 +380,12 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
                     CONF_SEGMENTS: segments,
                 }
                 if self.source == SOURCE_RECONFIGURE:
-                    updates = {CONF_HOST: self._host, CONF_CONTROLLER_TYPE: self._controller_type, **data}
+                    updates = {
+                        CONF_HOST: self._host,
+                        CONF_CONTROLLER_TYPE: self._controller_type,
+                        **data,
+                        **self._device_info,
+                    }
                     if not isinstance(result := await self._reconfigure(updates), str):
                         return result
                     errors["base"] = result

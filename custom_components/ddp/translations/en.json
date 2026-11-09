@@ -13,7 +13,7 @@
       },
       "controller": {
         "title": "Controller type",
-        "description": "Detected controller: {detected}. A vendor controller type adds a controller device with a main light (on/off and brightness) for the controller's built-in effects and presets, a light per palette color and a Scene select. Generic DDP creates only the per-output DDP lights.",
+        "description": "Detected controller: {detected}. A vendor controller type adds a controller device with a main light (on/off and brightness) for the controller's built-in effects and presets, a light per palette color and a Scene select. Every type then defines its DDP outputs on the next steps, prefilled from the layout the controller reports; Generic DDP creates only those per-output DDP lights.",
         "data": {
           "controller_type": "Controller type"
         },
@@ -23,7 +23,7 @@
       },
       "manual": {
         "title": "Describe the outputs",
-        "description": "Define the outputs yourself; the fields are prefilled from the detected or stored layout when there is one. Next you'll enter each output's name and pixel range; one light is created per output.",
+        "description": "Define the outputs; the fields are prefilled from the detected or stored layout when there is one. Next you'll enter each output's name and pixel range; one light is created per output. For a vendor controller type, keep the ranges in line with the controller's own port setup: the controller maps the DDP channels to its ports.",
         "data": {
           "data_type": "Pixel type",
           "outputs": "Number of outputs"
@@ -35,7 +35,7 @@
       },
       "output": {
         "title": "Output {output} of {outputs}",
-        "description": "Name this output and the pixels it covers, counting from 1 across the whole controller. Ranges may leave gaps but must not overlap another output.",
+        "description": "Name this output and the pixels it covers, counting from 1 across the whole controller. Ranges may leave gaps but must not overlap another output. For a vendor controller type, the ranges should normally match the controller's own port setup, since the controller maps DDP channels to its ports.",
         "data": {
           "name": "Name",
           "first_pixel": "First pixel",
@@ -49,7 +49,7 @@
       },
       "reconfigure": {
         "title": "Reconfigure the controller",
-        "description": "Detected controller: {detected}. Stored pixel type: {data_type}. Layout the controller reports now: {layout}. Submitting stores the reported layout (pixel type, outputs and pixel count), so a change of the controller's input mode (3 or 4 channels) takes effect; an output that is gone loses its light. Generic DDP, or a controller that reports no layout (none), continues to the output steps, prefilled with the stored outputs. Changing the host keeps the device and its lights. Changing the type adds or removes the controller device and its entities; the DDP lights are kept.",
+        "description": "Detected controller: {detected}. Stored pixel type: {data_type}. Layout the controller reports now: {layout}. Submitting continues to the output steps, prefilled from the layout the controller reports now (pixel type and outputs, keeping the names you stored), so a change of the controller's input mode (3 or 4 channels) takes effect; an output that is gone loses its light. Generic DDP, or a controller that reports no layout (none), prefills them with the stored outputs. Changing the host keeps the device and its lights. Changing the type adds or removes the controller device and its entities; the DDP lights are kept.",
         "data": {
           "host": "Host",
           "controller_type": "Controller type"
