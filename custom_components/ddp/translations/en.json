@@ -26,11 +26,11 @@
         "description": "Define the outputs; the fields are prefilled from the detected or stored layout when there is one. Next you'll enter each output's name and pixel range; one light is created per output. For a vendor controller type, keep the ranges in line with the controller's own port setup: the controller maps the DDP channels to its ports.",
         "data": {
           "data_type": "Pixel type",
-          "outputs": "Number of outputs"
+          "outputs": "Number of outputs (lights, not pixels)"
         },
         "data_description": {
           "data_type": "Channels per pixel: RGB is 3, RGBW is 4.",
-          "outputs": "How many lights to create, each over its own pixel range (1 to 16)."
+          "outputs": "How many Home Assistant lights to create, 1 to 16. Each covers a pixel range you enter next, so this is not the pixel count: a 122-pixel strip on two ports is 2 outputs. The pixel count follows from the highest last pixel."
         }
       },
       "output": {
