@@ -88,7 +88,7 @@ pinned git commits (`aioddp` is not yet published to PyPI).
 | Host | Add | IP address or hostname. One entry per host; adding the same host again is refused |
 | Controller type | Add, Reconfigure | Generic DDP or a vendor type (below) |
 | Pixel type | Add, Reconfigure | RGB (3 channels per pixel) or RGBW (4) |
-| Number of outputs | Add, Reconfigure | 1 to 16; one light each |
+| Number of outputs | Add, Reconfigure | 1 to 16; one light each, not the pixel count |
 | Name, First pixel, Last pixel | Add, Reconfigure (once per output) | 1-based, inclusive; gaps allowed, overlaps refused |
 
 DDP is send-only UDP with no acknowledgement, so setup can only check that a socket opens. Setup never sends a frame,

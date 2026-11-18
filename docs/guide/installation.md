@@ -39,7 +39,7 @@
 | Host | Add | IP address or hostname. One entry per host; adding the same host again is refused |
 | Controller type | Add, Reconfigure | Generic DDP or a vendor type (see [Controller types](configuration.md#controller-types)) |
 | Pixel type | Add, Reconfigure | RGB or RGBW (channels per pixel) |
-| Outputs | Add, Reconfigure | Number of outputs, 1-16 |
+| Outputs | Add, Reconfigure | Number of outputs (lights, not pixels), 1-16 |
 | Output name | Add, Reconfigure | One per output; names the light |
 | First pixel | Add, Reconfigure | 1-based, inclusive, across the whole controller. Outputs may not overlap; gaps are allowed |
 | Last pixel | Add, Reconfigure | Inclusive; the highest one sets the pixel count |
