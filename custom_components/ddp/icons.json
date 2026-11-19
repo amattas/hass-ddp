@@ -12,6 +12,9 @@
       },
       "pixel": {
         "default": "mdi:led-on"
+      },
+      "output_pixel": {
+        "default": "mdi:led-on"
       }
     },
     "select": {

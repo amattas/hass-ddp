@@ -58,15 +58,14 @@ rules:
     status: done
     comment: |
       Unique IDs are <config entry id>_<segment key>, <config entry id>_strip for All outputs,
-      <config entry id>_<segment key>_pixel<N> for pixel light N (physical number, so a flipped Reversed flag keeps
-      them), and on the controller device <config entry id>_controller (the main light), _color_1 to _color_5, and _scene. The 0.4.x Power switch,
+      <config entry id>_<segment key>_pixel<N> for pixel light N, and on the controller device <config entry id>_controller (the main light), _color_1 to _color_5, and _scene. The 0.4.x Power switch,
       Intensity number, and Mode selects are gone; setup removes their registry entries.
   has-entity-name:
     status: done
     comment: |
-      DDPEntity sets _attr_has_entity_name; segment lights are named after their output, the controller light is the
-      controller device's main entity (name None), and All outputs, Color 1-5, and Scene are named by
-      translation.
+      DDPEntity sets _attr_has_entity_name; with several outputs each output light is its output device's main entity
+      (name None), with one it is named after its output; the controller light is the controller device's main entity
+      (name None), and All outputs, Color 1-5, the pixel lights, and Scene are named by translation.
   runtime-data:
     status: done
     comment: DDPConfigEntry = ConfigEntry[DDPRuntime], stored in entry.runtime_data.
@@ -134,8 +133,10 @@ rules:
   devices:
     status: done
     comment: |
-      The DDP device (identifier: host; the output lights and All outputs) with manufacturer, model, and firmware when
-      the controller reports them. A vendor controller type adds a controller device (identifier: host:controller,
+      The DDP device (identifier: host; All outputs, and the output light with one output) with manufacturer, model,
+      and firmware when the controller reports them. With several outputs each output has a device (identifier:
+      host:<segment key>, named "<entry> <output name>", via_device_id the DDP device) holding its light (the main
+      entity) and its pixel lights. A vendor controller type adds a controller device (identifier: host:controller,
       named "<entry> <controller type>", via_device_id the DDP device) holding the controller light (its main entity), Color 1-5,
       and Scene; the DDP device is then named "<entry> Generic DDP".
   diagnostics:
@@ -190,8 +191,8 @@ rules:
   entity-translations:
     status: done
     comment: |
-      All outputs, Color 1-5 ("Color {slot}"), the pixel lights ("{output} Light {number}"), and Scene
-      are named by translation; the controller light takes
+      All outputs, Color 1-5 ("Color {slot}"), the pixel lights ("Light {number}" on an output's device,
+      "{output} Light {number}" with one output), and Scene are named by translation; the controller light takes
       the device's name. Segment lights carry the output name entered in the flow (prefilled from the
       controller's layout) and stored with the entry (Output 1, All), which is user data rather than a fixed string.
   exception-translations:
@@ -200,12 +201,12 @@ rules:
   icon-translations:
     status: done
     comment: |
-      icons.json has All outputs, Color 1-5, the pixel lights, the controller light, Scene, and every action; segment lights use
+      icons.json has All outputs, Color 1-5, both pixel light keys, the controller light, Scene, and every action; segment lights use
       the default light icon.
   reconfiguration-flow:
     status: done
     comment: |
-      Reconfigure changes the host (moving both device identifiers with it) and the controller type, re-reads the
+      Reconfigure changes the host (moving every device identifier with it: the DDP, output, and controller devices) and the controller type, re-reads the
       layout for a vendor type, and walks the output steps: prefilled from a usable layout (stored output names kept,
       its device info stored), else from the stored layout, as the form says. A color order option that does not fit
       the new pixel type is dropped.
@@ -217,10 +218,11 @@ rules:
   stale-devices:
     status: done
     comment: |
-      Reconfiguring to Generic DDP removes the controller device with its entities; a reconfigure that drops an
-      output (the layout lost it, or the user removed it in the output steps) removes that output's light (and All
-      outputs once one output is left), and turning the pixel lights option off removes the pixel lights. The DDP
-      device goes away with the entry.
+      Light setup removes every device of the entry it no longer has. Reconfiguring to Generic DDP removes the
+      controller device with its entities; a reconfigure that drops an output (the layout lost it, or the user removed
+      it in the output steps) removes that output's light and device (and All outputs and every output device once
+      one output is left; the kept light moves to the DDP device, keeping its entity ID), and turning the pixel lights
+      option off removes the pixel lights. The DDP device goes away with the entry.
 
   # Platinum
   async-dependency:

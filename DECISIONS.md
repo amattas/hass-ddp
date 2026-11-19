@@ -209,7 +209,7 @@ Superseded by 2026-11-19 (scene mode and DDP mode are exclusive).
 - Pixel lights are DDP lights over a one-pixel segment (`PixelLight`, a `DDPSegmentLight`), so they share the
   source, hand-off, hold, keepalive and restore machinery: on/off, brightness, RGB or RGBW color. No effects, and
   `ddp.set_pattern` on one is refused (`pixel_light_pattern`; `not_a_ddp_light` would read wrong, it is a DDP light).
-- Physical order: Light N is the N-th pixel along the installed string. Each segment stores `reversed` (the flow
+- (Superseded 2026-11-19, "Pixel lights follow DDP order": no Reversed flag.) Physical order: Light N is the N-th pixel along the installed string. Each segment stores `reversed` (the flow
   always writes it; an entry from before has none, read as false, so it loads unchanged with no migration): when true
   Light N is DDP pixel `start + length - N`, else `start + N - 1`. What DDP sends is unchanged. The flow prefills it
   from the layout (`OutputInfo.reversed_by_controller`, the NDB-Pro's per-port `rev`) and the output step has a
@@ -297,3 +297,44 @@ Superseded by 2026-11-19 (scene mode and DDP mode are exclusive).
 - Assumption, not measured on hardware: after HA stops sending (a scene command), the NDB-Pro shows its scene again
   once it notices DDP stopped, possibly only after its DDP timeout (about 20 s). The code sends nothing to speed this
   up; until then the last DDP frame may linger. The README says so.
+
+## 2026-11-19: Pixel lights follow DDP order; the controller applies rev
+
+- Hardware result: the NDB-Pro applies its per-port `rev` itself, so DDP order already is the string's order. With
+  the Reversed flag ticked (prefilled from `rev`) the pixel lights came out backwards; unticked, they were right.
+- Decided: the Reversed feature is removed. Light N is always DDP pixel `start + N - 1`. Gone: the output step's
+  Reversed field, the prefill from `OutputInfo.reversed_by_controller`, the reconfigure rule keeping a stored flag,
+  `SegmentConfig.reversed`, `SEGMENT_REVERSED`, and its strings and docs.
+- A 0.6.0 entry may have `reversed` stored in its segments: it is ignored at load, and since every flow path builds
+  new segment dicts (from the forms, or from the layout plus the stored names), the next reconfigure stops writing
+  it. No migration or version bump. Unique IDs `<entry>_<segment key>_pixel<N>` are unchanged.
+- Supersedes the Reversed parts of 2026-11-18: the physical-order bullet (including its reconfigure rule for a
+  stored flag) and the "flipping the flag keeps the entities" note.
+
+## 2026-11-19: One device per output
+
+- For navigability (an output with 80 pixel lights buried 122 entities in one device): with more than one output,
+  each output gets its own device, identifier `(DOMAIN, f"{host}:{segment key}")`, `via_device_id` the DDP device,
+  the same manufacturer, model and firmware. The output light is its main entity (`name = None`, so it takes the
+  device's name), and its pixel lights are "Light N" on it (translation key `pixel`, placeholder `number`). All
+  outputs stays on the DDP device.
+- Name: "<entry title> <output name>" for every controller type, e.g. "NDB-Pro Output 1". The DDP device's
+  "Generic DDP" suffix on a vendor entry exists only to tell it from the controller device; an output device is
+  already told apart by its output name, so "NDB-Pro Generic DDP Output 1" would be noise. The friendly names of a
+  Generic entry's lights stay what they were ("NDB-Pro Output 1", "NDB-Pro Output 2 Light 5"); a vendor entry's
+  lose "Generic DDP" ("NDB-Pro Output 1" instead of "NDB-Pro Generic DDP Output 1").
+- One output: no output device. The DDP device already is that output, so a child device would be one more click
+  for nothing. Its light keeps the output's name on the DDP device, and its pixel lights are "<output> Light N"
+  there (`OutputPixelLight`, translation key `output_pixel`).
+- Upgrade: entities keep their unique IDs and their registry entity IDs (a vendor entry keeps
+  `light.<title>_generic_ddp_output_1`); only their device changes, which HA applies when the entity is added. New
+  entities of a vendor entry get IDs from the new device name (`light.<title>_output_1`).
+- Stale devices: light setup removes every device of the entry it no longer wants (output devices of dropped
+  outputs, all of them once a single output is left, the controller device after a switch to Generic DDP). A light
+  setup still creates is detached from the device first (`device_id=None`), so the device's removal does not take
+  its registry entry (and entity ID) with it; it lands on its new device when added. This replaces the
+  controller-device-only removal.
+- Reconfigure with a new host moves the output devices' identifiers with the DDP and controller devices (one per
+  stored segment key); output devices whose output is then dropped are removed at setup.
+- Segment keys are `output<N>`, a layout's segment names or a pre-0.5 `all`, so `host:<key>` never collides with
+  `host:controller`.

@@ -37,6 +37,11 @@ def device_identifiers(host: str) -> tuple[tuple[str, str], tuple[str, str]]:
     return (DOMAIN, host), (DOMAIN, f"{host}{CONTROLLER_DEVICE_SUFFIX}")
 
 
+def output_identifier(host: str, key: str) -> tuple[str, str]:
+    """The identifier of the device of output ``key`` (segment key; entries with more than one output)."""
+    return (DOMAIN, f"{host}:{key}")
+
+
 def ddp_device_info(entry: DDPConfigEntry) -> DeviceInfo:
     """The DDP device: the DDP lights' device, named after the entry (a vendor entry's after the entry and Generic
     DDP, next to its controller device)."""
@@ -52,27 +57,37 @@ def ddp_device_info(entry: DDPConfigEntry) -> DeviceInfo:
     )
 
 
+def child_device_info(entry: DDPConfigEntry, identifier: tuple[str, str], name: str, ddp_device_id: str) -> DeviceInfo:
+    """A device connected through the DDP device (``ddp_device_id``, its registry ID): the controller device or an
+    output's device. Built in one call: since Home Assistant 2026.11 DeviceInfo is no longer a dict, so it cannot be
+    merged."""
+    return DeviceInfo(
+        identifiers={identifier},
+        name=name,
+        manufacturer=entry.data.get(CONF_MANUFACTURER),
+        model=entry.data.get(CONF_MODEL),
+        sw_version=entry.data.get(CONF_FIRMWARE),
+        via_device_id=ddp_device_id,
+    )
+
+
+def output_device_info(entry: DDPConfigEntry, key: str, name: str, ddp_device_id: str) -> DeviceInfo:
+    """Output ``key``'s device, "<entry title> <output name>": its light is the main entity, its pixel lights are
+    "Light N" on it."""
+    return child_device_info(
+        entry, output_identifier(entry.data[CONF_HOST], key), f"{entry.title} {name}", ddp_device_id
+    )
+
+
 class DDPEntity(Entity):
-    """Unique IDs are ``<entry_id>_<key>``. The entity is on the DDP device, or with ``ddp_device_id`` (that device's
-    registry ID) on the controller device, named after the entry and the controller type and connected through it."""
+    """Unique IDs are ``<entry_id>_<key>``. The entity is on the DDP device unless ``device_info`` names another (the
+    controller device, an output's device)."""
 
     _attr_has_entity_name = True
 
-    def __init__(self, entry: DDPConfigEntry, key: str, *, ddp_device_id: str | None = None) -> None:
+    def __init__(self, entry: DDPConfigEntry, key: str, *, device_info: DeviceInfo | None = None) -> None:
         self._attr_unique_id = f"{entry.entry_id}_{key}"
-        if ddp_device_id is None:
-            self._attr_device_info = ddp_device_info(entry)
-        else:
-            # Built in one call: since Home Assistant 2026.11 DeviceInfo is no longer a dict, so it cannot be merged.
-            label = CONTROLLER_TYPES[entry.data[CONF_CONTROLLER_TYPE]].label
-            self._attr_device_info = DeviceInfo(
-                identifiers={device_identifiers(entry.data[CONF_HOST])[1]},
-                name=f"{entry.title} {label}",
-                manufacturer=entry.data.get(CONF_MANUFACTURER),
-                model=entry.data.get(CONF_MODEL),
-                sw_version=entry.data.get(CONF_FIRMWARE),
-                via_device_id=ddp_device_id,
-            )
+        self._attr_device_info = device_info or ddp_device_info(entry)
 
     async def async_recall_preset(self, preset: int) -> None:
         """The ``recall_preset`` action: only the controller light of a vendor controller type can."""
@@ -116,7 +131,10 @@ class ControllerEntity(CoordinatorEntity[DDPScenesCoordinator], DDPEntity):
 
     def __init__(self, entry: DDPConfigEntry, commands: ControllerCommands, key: str, ddp_device_id: str) -> None:
         CoordinatorEntity.__init__(self, commands.coordinator)
-        DDPEntity.__init__(self, entry, key, ddp_device_id=ddp_device_id)
+        label = CONTROLLER_TYPES[entry.data[CONF_CONTROLLER_TYPE]].label
+        identifier = device_identifiers(entry.data[CONF_HOST])[1]
+        device = child_device_info(entry, identifier, f"{entry.title} {label}", ddp_device_id)
+        DDPEntity.__init__(self, entry, key, device_info=device)
         self._commands = commands
 
     @property

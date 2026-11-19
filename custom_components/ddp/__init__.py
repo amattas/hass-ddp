@@ -48,7 +48,6 @@ from .const import (
     SEGMENT_KEY,
     SEGMENT_LENGTH,
     SEGMENT_NAME,
-    SEGMENT_REVERSED,
     SEGMENT_START,
     SERVICE_RECALL_PRESET,
     SERVICE_SET_COLORS,
@@ -78,13 +77,11 @@ _PALETTE_COLOR = probatio.Any(_RGB, probatio.All(probatio.In(NAMED_COLORS), NAME
 @dataclass(frozen=True, slots=True)
 class SegmentConfig:
     """One light's slice of the strip: ``key`` is stable (unique IDs), ``name`` is for display (``None``: the
-    entity's translated name). ``reversed``: the controller reverses this output, so its pixel lights count from its
-    last DDP pixel (what DDP sends is unchanged)."""
+    entity's translated name)."""
 
     key: str
     name: str | None
     segment: Segment
-    reversed: bool = False
 
 
 @dataclass(slots=True)
@@ -280,7 +277,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
             s[SEGMENT_KEY],
             s[SEGMENT_NAME],
             Segment(s[SEGMENT_KEY], s[SEGMENT_START], s[SEGMENT_LENGTH]),
-            bool(s.get(SEGMENT_REVERSED, False)),
         )
         for s in entry.data[CONF_SEGMENTS]
     ]

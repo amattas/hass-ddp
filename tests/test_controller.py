@@ -55,9 +55,9 @@ from .conftest import FakeController, Listener, assert_holds_follow_lights
 MAIN = "light.ndb_pro_minleon_ndb_pro"  # the controller device "NDB-Pro Minleon NDB-Pro"'s main entity
 SCENE = "select.ndb_pro_minleon_ndb_pro_scene"
 COLORS = [f"light.ndb_pro_minleon_ndb_pro_color_{slot}" for slot in range(1, 6)]
-OUT1 = "light.ndb_pro_generic_ddp_output_1"  # the DDP device of a vendor entry is "NDB-Pro Generic DDP"
-OUT2 = "light.ndb_pro_generic_ddp_output_2"
-ALL = "light.ndb_pro_generic_ddp_all_outputs"
+OUT1 = "light.ndb_pro_output_1"  # the main entity of the output's own device, "NDB-Pro Output 1"
+OUT2 = "light.ndb_pro_output_2"
+ALL = "light.ndb_pro_generic_ddp_all_outputs"  # on the DDP device, "NDB-Pro Generic DDP" for a vendor entry
 OUT2_OFFSET = 80 * 3
 BLACK_OUT2 = bytes(42 * 3)
 DDP_LIGHTS = [OUT1, OUT2, ALL]
@@ -137,13 +137,31 @@ async def test_devices_and_names(
     controller_device = device_registry.async_get_device_by_identifier((DOMAIN, "127.0.0.1:controller"), entry.entry_id)
     assert ddp_device is not None
     assert (ddp_device.manufacturer, ddp_device.model) == ("Minleon", "NDBPRO")
+    # One device per output, named after the entry and the output, connected through the DDP device; its light is
+    # the main entity. All outputs stays on the DDP device.
+    for number, entity_id in enumerate((OUT1, OUT2), start=1):
+        output = device_registry.async_get_device_by_identifier((DOMAIN, f"127.0.0.1:output{number}"), entry.entry_id)
+        assert output is not None
+        assert (output.name, output.manufacturer, output.model, output.sw_version, output.via_device_id) == (
+            f"NDB-Pro Output {number}",
+            "Minleon",
+            "NDBPRO",
+            "1.2.3",
+            ddp_device.id,
+        )
+        registered = entity_registry.async_get(entity_id)
+        assert registered is not None
+        assert (_state(hass, entity_id).name, registered.unique_id, registered.device_id) == (
+            f"NDB-Pro Output {number}",
+            f"{entry.entry_id}_output{number}",
+            output.id,
+        )
+    devices = dr.async_entries_for_config_entry(device_registry, entry.entry_id)
+    assert len(devices) == (3 if controller_type == "generic" else 4)
     if controller_type == "generic":
-        # One device, named after the entry; no controller entities.
+        # The DDP device is named after the entry; no controller entities.
         assert ddp_device.name == "NDB-Pro"
-        assert [_state(hass, e).name for e in ["light.ndb_pro_output_1", "light.ndb_pro_all_outputs"]] == [
-            "NDB-Pro Output 1",
-            "NDB-Pro All outputs",
-        ]
+        assert _state(hass, "light.ndb_pro_all_outputs").name == "NDB-Pro All outputs"
         assert controller_device is None
         assert {e.domain for e in er.async_entries_for_config_entry(entity_registry, entry.entry_id)} == {"light"}
         assert len(er.async_entries_for_config_entry(entity_registry, entry.entry_id)) == 3
@@ -161,7 +179,6 @@ async def test_devices_and_names(
         controller_device.via_device_id,
     ) == ("NDB-Pro Minleon NDB-Pro", "Minleon", "NDBPRO", "1.2.3", ddp_device.id)
     names = {
-        OUT1: ("NDB-Pro Generic DDP Output 1", "output1", ddp_device),
         ALL: ("NDB-Pro Generic DDP All outputs", "strip", ddp_device),
         MAIN: ("NDB-Pro Minleon NDB-Pro", "controller", controller_device),
         SCENE: ("NDB-Pro Minleon NDB-Pro Scene", "scene", controller_device),
@@ -185,6 +202,55 @@ async def test_devices_and_names(
     assert (scene.state, scene.attributes["options"]) == ("Glow", EFFECTS)  # the fixture page's selected effect
     assert [_state(hass, e).state for e in COLORS] == [STATE_ON] + [STATE_OFF] * 4  # bc1 #be38f3, the rest empty
     assert fake_controller.commands() == []  # setup only reads
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize(
+    ("controller_type", "prefix"),
+    [("generic", "ndb_pro_"), ("ndbpro", "ndb_pro_generic_ddp_")],
+    ids=["generic", "vendor"],
+)
+async def test_upgrade_moves_the_output_lights_to_their_devices_keeping_entity_ids(
+    hass: HomeAssistant,
+    entity_registry: er.EntityRegistry,
+    device_registry: dr.DeviceRegistry,
+    fake_controller: FakeController,
+    entry_factory: Callable[..., MockConfigEntry],
+    controller_type: str,
+    prefix: str,
+) -> None:
+    # A 0.6.0 entry: every DDP light on the DDP device, a vendor entry's named "NDB-Pro Generic DDP ...".
+    entry = entry_factory(controller=fake_controller, controller_type=controller_type, options={"pixel_lights": True})
+    ddp_device = device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, "127.0.0.1")}
+    )
+    old = {
+        key: entity_registry.async_get_or_create(
+            LIGHT_DOMAIN,
+            DOMAIN,
+            f"{entry.entry_id}_{key}",
+            config_entry=entry,
+            device_id=ddp_device.id,
+            suggested_object_id=f"{prefix}{object_id}",
+        ).entity_id
+        for key, object_id in [
+            ("output1", "output_1"),
+            ("output2_pixel5", "output_2_light_5"),
+            ("strip", "all_outputs"),
+        ]
+    }
+    await _setup(hass, entry)
+
+    # Same unique IDs and entity IDs; the output lights and pixel lights now sit on their output's device.
+    for key, entity_id in old.items():
+        registered = entity_registry.async_get(entity_id)
+        assert registered is not None
+        assert registered.unique_id == f"{entry.entry_id}_{key}"
+        device = device_registry.async_get(registered.device_id)  # type: ignore[arg-type]
+        assert device is not None
+        expected = {(DOMAIN, "127.0.0.1")} if key == "strip" else {(DOMAIN, f"127.0.0.1:{key.split('_')[0]}")}
+        assert device.identifiers == expected
+        assert _state(hass, entity_id).state == STATE_OFF
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 

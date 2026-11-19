@@ -6,15 +6,18 @@
 |---|---|
 | **Output N** light (one per output defined at setup; an entry from before 0.5.0 has a single **All** light until it is reconfigured) | On/off, brightness, RGB color (RGBW color for an RGBW entry), the aioddp effects, and multi-color patterns (`ddp.set_pattern`). Sends DDP; its state is assumed. On a vendor controller, turning it on stops a running scene (the controller goes `Off`), and starting a scene turns it off |
 | **All outputs** light (only when the controller has more than one output) | The same as an output light, over the whole strip: a pattern or effect runs on across the outputs in one DDP frame |
-| **Output N Light 1** to **Light N** (with the **One light per pixel** option; one per pixel of every output) | One pixel each: on/off, brightness, and color (RGBW for an RGBW entry); no effects or patterns. Numbered along the installed string: Light 1 is the output's first pixel, or its last one on an output marked **Reversed**. Shares its pixel with its output light and All outputs (see below) |
+| **Output N Light 1** to **Light N** (with the **One light per pixel** option; one per pixel of every output) | One pixel each: on/off, brightness, and color (RGBW for an RGBW entry); no effects or patterns. Numbered in DDP order from the output's first pixel (a controller that reverses a port applies that itself, so this is the string's order). On the output's own device when there are several outputs, named "Light N". Shares its pixel with its output light and All outputs (see below) |
 | **Controller** light (vendor controller types only; the controller device's main entity, named like the device) | On while the controller runs a scene. On brings back the last scene (else the first), also after a restart; brightness is the controller's own intensity (1-100%), and turn_on with a brightness sets it. Off is the controller's `Off`; starting a scene turns the DDP lights off. Its `colors` and `background` attributes are the controller's palette (the colors its effects use), set with `ddp.set_colors`; `ddp.recall_preset` plays a stored preset. Polled |
 | **Color 1** to **Color 5** lights (controller device) | One palette slot each; off empties the slot. A Color tab for a custom color (brightness shows 255 and scales the color a turn_on sends) and a Temperature tab, a continuous 2700-6500 K range: the ends are the controller's white LEDs, between them is a color |
 | **Scene** select (controller device) | The controller's built-in effects and shows; the running one is selected, none while it is `Off`. Selecting one runs it and turns the DDP lights off |
 
-**Devices.** The output lights, All outputs and the pixel lights are on the DDP device, named after the entry. A vendor controller type
-adds a controller device named after the entry and the type (for example "Front Yard Minleon NDB-Pro"), connected
-through the DDP device, with the main light, Color 1 to 5, and Scene on it; the DDP device is then named
-after the entry and Generic DDP ("Front Yard Generic DDP").
+**Devices.** The lights are spread over devices, connected through the DDP device. With more than one output, each output has its own device, named
+after the entry and the output (for example "Front Yard Output 1"): the output light is its main entity (it takes the
+device's name) and the output's pixel lights are on it as "Light 1", "Light 2", and so on. All outputs stays on the
+DDP device, which is named after the entry. With a single output, its light and its pixel lights ("<output> Light N")
+are on the DDP device. A vendor controller type adds a controller device named after the entry and the type (for
+example "Front Yard Minleon NDB-Pro"), connected through the DDP device, with the main light, Color 1 to 5, and Scene
+on it; the DDP device is then named after the entry and Generic DDP ("Front Yard Generic DDP").
 
 Actions: `ddp.set_pattern` (DDP lights: the outputs and All outputs, not the pixel lights), and `ddp.recall_preset` and `ddp.set_colors`
 (the NDB-Pro controller light only). Home Assistant's `light.turn_on` and `light.turn_off` work on every light, and scenes

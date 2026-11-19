@@ -5,9 +5,12 @@ Segment lights: on/off, brightness, RGB color (RGBW on an rgbw entry, white on t
 multi-color patterns (``ddp.set_pattern``), restored and re-sent on startup. Effects that render RGB only (the
 animated ones) take the first three channels of an RGBW color and ignore W. An entry with more than one segment
 also gets "All outputs", the same light over the whole strip, so a pattern or effect runs on across the outputs in
-one DDP frame. With the pixel lights option, every output also gets "<output> Light 1".."Light N", one pixel each
-(on/off, brightness, color; no effects or patterns), numbered along the installed string: on an output the controller
-reverses, Light 1 is the output's last DDP pixel.
+one DDP frame. With the pixel lights option, every output also gets "Light 1".."Light N", one pixel each (on/off,
+brightness, color; no effects or patterns), in DDP order (a controller that reverses a port applies that itself).
+
+Devices: with several outputs each output has its own device ("<entry> <output>", connected through the DDP device),
+its light as the main entity and its pixel lights "Light N" on it; All outputs stays on the DDP device. With one
+output its light and pixel lights ("<output> Light N") are on the DDP device.
 
 Source: each DDP light is lit by nothing (``off``) or by HA over DDP (``ddp``, on).
 
@@ -57,6 +60,7 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoredExtraData, RestoreEntity
 from homeassistant.util import color as color_util
@@ -87,7 +91,14 @@ from .const import (
 )
 from .controller import DEFAULT_CUSTOM_COLOR, EMPTY_COLOR, PALETTE_SLOTS
 from .coordinator import SceneState
-from .entity import ControllerEntity, DDPEntity, controller_device_parent, device_identifiers
+from .entity import (
+    ControllerEntity,
+    DDPEntity,
+    controller_device_parent,
+    device_identifiers,
+    output_device_info,
+    output_identifier,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -177,14 +188,26 @@ async def async_setup_entry(
     """One light per configured segment, All outputs when there are several, one light per pixel with the pixel lights
     option, and for a vendor controller the five palette slot lights."""
     runtime = entry.runtime_data
-    lights = [DDPSegmentLight(entry, segment) for segment in runtime.segments]
-    if len(runtime.segments) > 1:
+    host = entry.data[CONF_HOST]
+    several = len(runtime.segments) > 1
+    # One device per output when there are several (one output: the DDP device already is it).
+    output_devices: dict[str, DeviceInfo] = {}
+    if several:
+        parent = controller_device_parent(hass, entry)
+        output_devices = {
+            output.key: output_device_info(entry, output.key, output.name or output.key, parent)
+            for output in runtime.segments
+        }
+    lights = [DDPSegmentLight(entry, segment, output_devices.get(segment.key)) for segment in runtime.segments]
+    if several:
         whole = Segment(STRIP_KEY, 0, runtime.sender.strip.pixel_count)
         lights.append(AllOutputsLight(entry, SegmentConfig(STRIP_KEY, None, whole)))
     if entry.options.get(CONF_PIXEL_LIGHTS, DEFAULT_PIXEL_LIGHTS):
         # After the outputs: restore re-sends in this order, so a pixel's own color lands over its output's.
         lights.extend(
-            PixelLight(entry, output, number)
+            PixelLight(entry, output, number, output_devices.get(output.key))
+            if several
+            else OutputPixelLight(entry, output, number)
             for output in runtime.segments
             for number in range(1, output.segment.length + 1)
         )
@@ -201,13 +224,13 @@ async def async_setup_entry(
     for registered in er.async_entries_for_config_entry(registry, entry.entry_id):
         if registered.domain == LIGHT_DOMAIN and registered.unique_id not in current:
             registry.async_remove(registered.entity_id)
+    ddp, controller = device_identifiers(host)
+    wanted = {ddp, *(output_identifier(host, key) for key in output_devices)}
+    if runtime.commands is not None:
+        wanted.add(controller)
+    _remove_stale_devices(hass, entry, wanted, current)
     async_add_entities(lights)
     if runtime.commands is None:
-        # Switched to Generic DDP: drop the controller device the previous type registered, with its entities.
-        devices = dr.async_get(hass)
-        _, controller = device_identifiers(entry.data[CONF_HOST])
-        if stale_device := devices.async_get_device_by_identifier(controller, entry.entry_id):
-            devices.async_remove_device(stale_device.id)
         return
     parent = controller_device_parent(hass, entry)
     commands = runtime.commands
@@ -217,6 +240,22 @@ async def async_setup_entry(
             *(PaletteLight(entry, commands, parent, slot) for slot in range(1, PALETTE_SLOTS + 1)),
         ]
     )
+
+
+def _remove_stale_devices(
+    hass: HomeAssistant, entry: DDPConfigEntry, wanted: set[tuple[str, str]], current: set[str | None]
+) -> None:
+    """Remove the entry's devices it no longer has: an output's device once the output is gone or only one output is
+    left, and the controller device after a switch to Generic DDP (with its entities). A light this setup still
+    creates is detached first, so removing its old device keeps it (and its entity ID); it lands on its new device."""
+    devices, registry = dr.async_get(hass), er.async_get(hass)
+    for device in dr.async_entries_for_config_entry(devices, entry.entry_id):
+        if device.identifiers & wanted:
+            continue
+        for registered in er.async_entries_for_device(registry, device.id, include_disabled_entities=True):
+            if registered.unique_id in current:
+                registry.async_update_entity(registered.entity_id, device_id=None)
+        devices.async_remove_device(device.id)
 
 
 def _color(value: object) -> Color | None:
@@ -252,13 +291,16 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
     _attr_supported_features = LightEntityFeature.EFFECT
     _attr_effect_list: list[str] | None = [EFFECT_OFF, *EFFECTS]
 
-    def __init__(self, entry: DDPConfigEntry, config: SegmentConfig) -> None:
-        super().__init__(entry, config.key)
+    def __init__(self, entry: DDPConfigEntry, config: SegmentConfig, device: DeviceInfo | None = None) -> None:
+        """``device``: the output's own device, whose main entity this light is (named after the device)."""
+        super().__init__(entry, config.key, device_info=device)
         self._runtime: DDPRuntime = entry.runtime_data
         self._config = config
         self._lock = asyncio.Lock()  # one state change at a time, so runners never double-start
-        if config.name is not None:
-            self._attr_name = config.name  # the layout's label for this output, stored with the entry
+        if device is not None:
+            self._attr_name = None  # the device's main entity: "<entry> <output>"
+        elif config.name is not None:
+            self._attr_name = config.name  # the output's name, stored with the entry
         self._rgbw = entry.data[CONF_DATA_TYPE] == DATA_TYPE_RGBW
         mode = ColorMode.RGBW if self._rgbw else ColorMode.RGB
         self._attr_color_mode = mode
@@ -640,20 +682,23 @@ class AllOutputsLight(DDPSegmentLight):
 class PixelLight(DDPSegmentLight):
     """One pixel of an output (the pixel lights option): on/off, brightness and color; no effects, no patterns.
 
-    ``number`` counts from 1 along the installed string: from the output's first DDP pixel, or, on an output the
-    controller reverses, from its last. The unique ID keeps the number (``<output key>_pixel<number>``), so flipping
-    the output's reversed flag keeps the entities and maps them to the other end.
+    ``number`` counts from 1 in DDP order, from the output's first pixel (a controller that reverses a port applies
+    that itself, so DDP order is the string's). Unique ID ``<output key>_pixel<number>``. "Light N" on the output's
+    device.
     """
 
     _attr_translation_key = "pixel"
     _attr_supported_features = LightEntityFeature(0)
     _attr_effect_list = None
 
-    def __init__(self, entry: DDPConfigEntry, output: SegmentConfig, number: int) -> None:
-        segment = output.segment
-        index = segment.end - number if output.reversed else segment.start + number - 1
+    def __init__(
+        self, entry: DDPConfigEntry, output: SegmentConfig, number: int, device: DeviceInfo | None = None
+    ) -> None:
+        index = output.segment.start + number - 1
         key = f"{output.key}_{PIXEL_KEY}{number}"
         super().__init__(entry, SegmentConfig(key, None, Segment(key, index, 1)))
+        if device is not None:
+            self._attr_device_info = device
         self._attr_translation_placeholders = {"output": output.name or output.key, "number": str(number)}
 
     async def _take_pixels(self) -> None:
@@ -683,6 +728,12 @@ def _scaled(color: RGB, brightness: int | None) -> RGB:
     if brightness is None:
         return color
     return (round(color[0] * brightness / 255), round(color[1] * brightness / 255), round(color[2] * brightness / 255))
+
+
+class OutputPixelLight(PixelLight):
+    """A pixel light of an entry with one output, on the DDP device: "<output> Light N"."""
+
+    _attr_translation_key = "output_pixel"
 
 
 class ControllerLight(ControllerEntity, LightEntity, RestoreEntity):
