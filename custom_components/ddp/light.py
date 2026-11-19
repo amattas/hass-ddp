@@ -9,25 +9,22 @@ one DDP frame. With the pixel lights option, every output also gets "<output> Li
 (on/off, brightness, color; no effects or patterns), numbered along the installed string: on an output the controller
 reverses, Light 1 is the output's last DDP pixel.
 
-Source: each DDP light is lit by nothing (``off``), by HA over DDP (``ddp``), by the controller's running scene
-(``scene``: nothing is sent), or is held black over a running scene (``blanked``: turned off while the scene runs).
-It shows on for ``ddp`` and ``scene``. A bare turn_on of a blanked light releases its pixels back to the scene; any
-turn_on with a brightness, color or effect takes it to ``ddp``.
+Source: each DDP light is lit by nothing (``off``) or by HA over DDP (``ddp``, on).
 
 Ownership: lights whose pixels overlap (All outputs, each output, each pixel light) take the pixels from each other.
-Turning one on over DDP stops the overlapping lights' runners and shows the ``ddp`` and ``scene`` ones off without
-sending anything; the pixels then show only the light that was turned on, where it covers them. One exception: a pixel
-light turns nothing off. Its output and All outputs stay on, lighting their other pixels (a scene keeps showing; an
-effect or pattern stops, its last frame frozen, effect off); last write wins per pixel. Turning a light off blanks
-all its pixels, so the lights inside it go off (or blanked) with it. A light with lights inside it (All outputs over
-the outputs, an output over its pixel lights) is blanked only while one of them still is, and holds its black through
-theirs. Which pixels the sender keeps resending follows the lights' state
-(``DDPRuntime.sync_holds``, after every change).
+Turning one on over DDP stops the overlapping lights' runners and shows them off without sending anything; the pixels
+then show only the light that was turned on, where it covers them. One exception: a pixel light turns nothing off.
+Its output and All outputs stay on, lighting their other pixels (an effect or pattern stops, its last frame frozen,
+effect off); last write wins per pixel. Turning a light off blanks all its pixels, so the lights inside it go off
+with it. Which pixels the sender keeps resending follows the lights' state (``DDPRuntime.sync_holds``, after every
+change): while any DDP light is on, every DDP light's pixels (black for the off ones); else none.
 
-The controller device's main light and Scene select run the controller's built-in effects and stored presets; DDP
-data overrides those while it flows, so once the controller took the command every DDP light goes to ``scene``
-(sending nothing) and the sender is released (``ControllerCommands``). A poll that finds a scene started or stopped
-outside HA does the same. "Color 1".."Color 5" set one slot each of the palette those effects use, which leaves DDP
+Scene mode and DDP mode are exclusive on a vendor controller: it cannot report the pixels of its own scenes, so DDP
+pixels over a running scene could never be shown truthfully. The controller device's main light, Scene select and
+``ddp.recall_preset`` start a scene; once the controller took the command every DDP light goes off (sending nothing)
+and the sender is released (``ControllerCommands``); a poll that finds a scene started outside HA does the same.
+Turning a DDP light on while a scene runs first turns the controller off (its "Off"), and fails without sending if it
+cannot. "Color 1".."Color 5" set one slot each of the palette those effects use, which leaves DDP
 alone (``ddp.set_colors`` on the controller light sets them all);
 a Color tab sets a custom color, a Temperature tab a white: the controller's own at either end, HA's kelvin -> RGB in
 between (the controller converts RGB to its pixels itself).
@@ -37,7 +34,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Container, Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -103,8 +101,7 @@ DEFAULT_RGBW: RGBW = (0, 0, 0, 255)  # white on an RGBW strip is its white LEDs 
 EFFECTS: dict[str, EffectInfo] = {info.name: info for info in list_effects() if info.name != SOLID_EFFECT}
 
 ATTR_PATTERN = "pattern"
-ATTR_SOURCE = "source"  # restore data: a light that was on showing a scene is not re-sent
-ALL_SOURCES = tuple(LightSource)
+ATTR_SOURCE = "source"  # restore data: only a light DDP drove is re-sent
 CONTROLLER_KEY = "controller"  # unique-ID suffix of the controller light (the pre-0.4 ID, reused)
 ATTR_LAST_EFFECT = "last_effect"  # restore data: the last scene, for a bare turn_on after a restart
 COLOR_KEY = "color"  # unique-ID suffix of a palette slot light, with its slot: color_1 .. color_5
@@ -245,7 +242,7 @@ def _overlaps(a: Segment, b: Segment) -> bool:
 
 
 class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
-    """A segment of the strip. DDP is send-only, so HA's state (and the controller's polled scene) is the truth.
+    """A segment of the strip. DDP is send-only, so HA's state is the truth.
 
     The color mode follows the entry's data type: RGB, or RGBW (``rgbw_color``) for 4-channel pixels.
     """
@@ -291,19 +288,11 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
 
     @property
     def source(self) -> LightSource:
-        """A light with lights inside it is blanked only while one of them still is, so un-blanking them one by one
-        brings it back (All outputs over its outputs, an output over its pixel lights)."""
-        if (
-            self._source is LightSource.BLANKED
-            and self._inside
-            and all(light.source is not LightSource.BLANKED for light in self._inside)
-        ):
-            return LightSource.SCENE
         return self._source
 
     @property
     def is_on(self) -> bool:
-        return self.source in (LightSource.DDP, LightSource.SCENE)
+        return self._source is LightSource.DDP
 
     @property
     def key(self) -> str:
@@ -315,28 +304,14 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
 
     @property
     def holding(self) -> bool:
-        """Whether these pixels must stay held (``sync_holds`` holds them): see ``holds``."""
-        return self.holds(self._runtime.off_lights_hold)
-
-    def holds(self, off_lights_hold: bool) -> bool:
-        """Whether these pixels must stay held: DDP drives them, black is held over a running scene (by the lights
-        inside this one when it has any, so un-blanking one of them releases just its pixels), or the light is off and
-        ``off_lights_hold`` (``DDPRuntime.off_lights_hold``: no scene runs and another light drives DDP)."""
-        if self._source is LightSource.BLANKED:
-            return not self._inside
-        return self._source is LightSource.DDP or (self._source is LightSource.OFF and off_lights_hold)
+        """Whether these pixels must stay held (``sync_holds`` holds them): DDP drives them, or another light does (an
+        off light then stays black)."""
+        return self._source is LightSource.DDP or self._runtime.ddp_driving
 
     @property
     def solid(self) -> bool:
         """DDP drives one solid color: nothing repaints the pixels until this light changes."""
         return self._source is LightSource.DDP and self._attr_effect == EFFECT_OFF
-
-    @property
-    def idle(self) -> bool:
-        """Off, with no overlapping light driving these pixels over DDP: a running scene shows on them."""
-        return self._source is LightSource.OFF and all(
-            light.source is not LightSource.DDP for light in self._overlapping()
-        )
 
     def _overlapping(self) -> list[DDPSegmentLight]:
         return self._overlap
@@ -344,17 +319,6 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
     def _covered(self) -> list[DDPSegmentLight]:
         """The other lights whose pixels all lie in this light's (the outputs and pixel lights, for All outputs)."""
         return self._inside
-
-    def _normalize(self) -> None:
-        """Store the derived source (a light with lights inside derives its own from theirs)."""
-        self._source = self.source
-
-    def _write_states(self) -> None:
-        """Write this light's state and that of the lights sharing its pixels (they may derive theirs from it)."""
-        self.async_write_ha_state()
-        for light in self._overlapping():
-            light._normalize()
-            light.async_write_ha_state()
 
     @property
     def rgb_color(self) -> RGB | None:
@@ -375,15 +339,11 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
     async def async_added_to_hass(self) -> None:
         """Restore the last state and, if HA drove it, send it again (DDP controllers forget on power loss).
 
-        A light that was blanked is not restored, and one that showed a scene is not re-sent: if the controller runs
-        a scene now, the light shows it (when no overlapping light took the pixels over DDP). Sends nothing else.
+        While the controller runs a scene (setup read its state) the light restores off and sends nothing: scene mode
+        and DDP mode are exclusive. Sends nothing else.
         """
         await super().async_added_to_hass()
         await self._restore()
-        scenes = self._runtime.scenes
-        running = scenes is not None and scenes.data is not None and scenes.data.effect not in (None, CONTROLLER_OFF)
-        if running and self.idle:
-            self._source = LightSource.SCENE
 
     async def _restore(self) -> None:
         last = await self.async_get_last_state()
@@ -403,7 +363,10 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
         effect = look.get(ATTR_EFFECT)
         self._attr_effect = effect if effect in EFFECTS else EFFECT_OFF
         self._pattern = self._restored_pattern(look.get(ATTR_PATTERN))
+        # A light that showed a scene (stored by an earlier version) was not driven by DDP.
         if last.state != STATE_ON or look.get(ATTR_SOURCE, LightSource.DDP) != LightSource.DDP:
+            return
+        if self._runtime.scene_running:
             return
         try:
             async with self._lock:
@@ -456,12 +419,6 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
                 translation_key="unknown_effect",
                 translation_placeholders={"effect": str(effect), "effects": ", ".join(self.effect_list or [])},
             )
-        if not kwargs.keys() & {ATTR_BRIGHTNESS, ATTR_EFFECT, self._color_key} and self.source in (
-            LightSource.SCENE,
-            LightSource.BLANKED,
-        ):
-            await self._show_scene()
-            return
         # A color or another effect replaces the pattern; a bare turn_on (or brightness) keeps it.
         keep = self._color_key not in kwargs and effect == self._attr_effect
         await self._apply(
@@ -520,8 +477,9 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
         await self._apply(brightness or self._attr_brightness, pattern.colors[0], effect, pattern)
 
     async def _apply(self, brightness: int | None, color: Color, effect: str, pattern: Pattern | None) -> None:
-        """Take the pixels from overlapping lights, then show this look; a failed send keeps the previous one."""
-        async with self._runtime.ownership:  # two lights sharing pixels never take them at the same time
+        """Leave scene mode, take the pixels from overlapping lights, then show this look; a failed send keeps the
+        previous one."""
+        async with self._exclusive(leave_scene=True):
             await self._take_pixels()
             async with self._lock:
                 previous = (self._attr_brightness, self._color, self._attr_effect, self._pattern)
@@ -534,21 +492,25 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
                     raise
                 self._source = LightSource.DDP
             await self._sync_holds()
-        self._write_states()
+        self.async_write_ha_state()
 
-    async def _show_scene(self) -> None:
-        """Un-blank: hand this light's pixels (and those of the blanked lights it covers) back to the running scene.
-
-        Sends nothing; the controller shows the scene there again after its DDP timeout (about 20 s on the NDB-Pro).
-        """
-        async with self._runtime.ownership:
-            async with self._lock:
-                if self._source is LightSource.BLANKED:
-                    self._source = LightSource.SCENE
-            for light in self._covered():
-                await light.async_follow_scene(LightSource.SCENE, (LightSource.BLANKED,))
-            await self._sync_holds()
-        self._write_states()
+    @asynccontextmanager
+    async def _exclusive(self, *, leave_scene: bool) -> AsyncIterator[None]:
+        """Hold the locks for a change to the DDP lights: the controller's (a vendor entry: scene and DDP mode are
+        exclusive, so a scene command or poll never interleaves), then ``ownership`` (two lights sharing pixels never
+        take them at the same time). With ``leave_scene``, a running scene is first turned off on the controller; if
+        that fails, the change sends nothing."""
+        runtime = self._runtime
+        commands = runtime.commands
+        if commands is None:
+            async with runtime.ownership:
+                yield
+            return
+        async with commands.coordinator.lock:
+            if leave_scene:
+                await commands.leave_scene(self.entity_id)
+            async with runtime.ownership:
+                yield
 
     async def _sync_holds(self) -> None:
         """``DDPRuntime.sync_holds`` for a change this light made; a failed black frame is this light's error."""
@@ -558,62 +520,41 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
             raise self._send_error(err) from err
 
     async def _take_pixels(self) -> None:
-        """Hand back every other ``ddp`` or ``scene`` light that shares pixels with this one (the ownership rule)."""
+        """Hand back every other light that shares pixels with this one (the ownership rule)."""
         for light in self._overlapping():
             await light.async_hand_back()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Blank this light's pixels if it is on; an off light sends nothing (an overlapping light may own them).
 
-        While a scene runs the black is held: the light (and every light it covers) is ``blanked``. Otherwise the
-        light is off, and so is every ``ddp`` light it covers (the black covers their pixels too); its black stays
-        held only while another light drives DDP.
+        Every ``ddp`` light it covers goes off with it (the black covers their pixels too); its black stays held only
+        while another light drives DDP.
 
-        Takes the locks in turn_on's order (ownership, then this light's own), so a concurrent turn_on of an
-        overlapping light either finishes first (this light was handed back, so it is off) or runs after.
+        Takes the locks in turn_on's order, so a concurrent turn_on of an overlapping light either finishes first
+        (this light was handed back, so it is off) or runs after.
         """
         runtime = self._runtime
-        async with runtime.ownership:
+        async with self._exclusive(leave_scene=False):
             async with self._lock:
                 await runtime.stop_runner(self._config.key)
                 if not self.is_on:
                     return
-                blank = runtime.scene_running
                 try:
                     await runtime.sender.off(self._config.segment)
                 except DDPError as err:
                     raise self._send_error(err) from err
-                self._source = LightSource.BLANKED if blank else LightSource.OFF
+                self._source = LightSource.OFF
             for light in self._covered():
-                if blank:
-                    await light.async_follow_scene(LightSource.BLANKED, ALL_SOURCES)
-                else:
-                    await light.async_hand_back()
+                await light.async_hand_back()
             await self._sync_holds()
-        self._write_states()
-
-    async def async_controller_off(self) -> None:
-        """The controller is going "Off": blank this light if DDP drives it, else just show it off.
-
-        Releases nothing; the controller command syncs the held pixels once every DDP light is off.
-        """
-        runtime = self._runtime
-        async with runtime.ownership, self._lock:
-            await runtime.stop_runner(self._config.key)
-            if self._source is LightSource.DDP:
-                try:
-                    await runtime.sender.off(self._config.segment)
-                except DDPError as err:
-                    raise self._send_error(err) from err
-            self._source = LightSource.OFF
         self.async_write_ha_state()
 
     async def async_hand_back(self) -> None:
-        """Stop this light's runner and, if DDP drove it or it showed the scene, show it off, sending nothing: another
-        light takes over. A blanked light keeps its black."""
+        """Stop this light's runner and show it off, sending nothing: another light, or the controller's scene, takes
+        over its pixels."""
         async with self._lock:
             await self._runtime.stop_runner(self._config.key)
-            if self.source not in (LightSource.DDP, LightSource.SCENE):
+            if self._source is LightSource.OFF:
                 return
             self._source = LightSource.OFF
         self.async_write_ha_state()
@@ -631,19 +572,6 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
             if not runtime.sent(self.segment):
                 await self._send_on()
         self.async_write_ha_state()
-
-    async def async_follow_scene(self, source: LightSource, sources: Container[LightSource]) -> bool:
-        """Show ``source`` if this light's is one of ``sources``, stopping any runner and sending nothing.
-
-        For the controller's scene starting or stopping; returns whether the light changed.
-        """
-        async with self._lock:
-            if self._source not in sources:
-                return False
-            await self._runtime.stop_runner(self._config.key)
-            self._source = source
-        self._write_states()
-        return True
 
     async def _send_on(self) -> None:
         """Send the current brightness, color or pattern, and effect. Caller holds the lock.
@@ -713,9 +641,8 @@ class PixelLight(DDPSegmentLight):
         self._attr_translation_placeholders = {"output": output.name or output.key, "number": str(number)}
 
     async def _take_pixels(self) -> None:
-        """Take this pixel over the overlapping lights without turning them off: they keep lighting their other pixels
-        (a scene keeps showing, a solid color stays). One running an effect or pattern is frozen, since its runner
-        would repaint the pixel."""
+        """Take this pixel over the overlapping lights without turning them off: they keep lighting their other
+        pixels. One running an effect or pattern is frozen, since its runner would repaint the pixel."""
         for light in self._overlapping():
             await light.async_freeze()
 

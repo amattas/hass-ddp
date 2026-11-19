@@ -36,6 +36,7 @@ from .const import (
     CONF_MODEL,
     CONF_PIXEL_COUNT,
     CONF_SEGMENTS,
+    CONTROLLER_OFF,
     DATA_TYPE_RGBW,
     DEFAULT_BRIGHTNESS_CAP,
     DEFAULT_COLOR_ORDER,
@@ -112,36 +113,33 @@ class DDPRuntime:
 
     @property
     def scene_running(self) -> bool:
-        """A controller scene lights some of the DDP lights' pixels (shown, or blanked by HA's held black)."""
-        return any(light.source in (LightSource.SCENE, LightSource.BLANKED) for light in self.segment_lights)
+        """The controller runs a scene, as last read or commanded (scene mode: every DDP light is off)."""
+        data = self.scenes.data if self.scenes is not None else None
+        return data is not None and data.effect not in (None, CONTROLLER_OFF)
 
     @property
-    def off_lights_hold(self) -> bool:
-        """An off DDP light holds black: no scene runs and another light drives DDP."""
-        return not self.scene_running and any(light.source is LightSource.DDP for light in self.segment_lights)
+    def ddp_driving(self) -> bool:
+        """Some DDP light drives its pixels (DDP mode): the off DDP lights then hold black."""
+        return any(light.source is LightSource.DDP for light in self.segment_lights)
 
     async def sync_holds(self) -> None:
-        """Make the held pixels exactly those of the lights that hold (``holding``). Caller holds ``ownership``.
+        """Make the held pixels follow the lights' state (``holding``). Caller holds ``ownership``.
 
-        The held pixels are read from the sender (``DDPSender.held``), never from bookkeeping: a runner stopped before
-        its first frame never held its range. A held range no holding light covers is released (the controller's own
-        effect takes it back after its DDP timeout); an off or blanked light that should hold gets black where nothing
-        is held. A ``ddp`` light's pixels count as covered even before its runner's first frame, so they never get
-        black. Raises ``DDPError``.
+        With no DDP light on (Generic DDP all off, or a vendor controller in scene mode) nothing is held, so keepalive
+        resends nothing and the controller's own effect or scene takes the pixels back after its DDP timeout. While
+        one is on, every DDP light's pixels are held: an off light gets black where the sender holds nothing yet. The
+        held pixels are read from the sender (``DDPSender.held``), never from bookkeeping: a runner stopped before its
+        first frame never held its range. A ``ddp`` light's pixels count as covered even before its runner's first
+        frame, so they never get black. Raises ``DDPError``.
         """
-        off_lights_hold = self.off_lights_hold  # once, not per light: there may be a light per pixel
-        holding = [light for light in self.segment_lights if light.holds(off_lights_hold)]
-        if not holding:
+        if not self.ddp_driving:
             self.sender.release()
             return
         channels = self.sender.strip.channels
         held = [Segment(_HELD, offset // channels, length // channels) for offset, length in self.sender.held]
-        keep = sorted((light.segment for light in holding), key=_start)
-        for segment in held:
-            for start, end in _uncovered(segment, keep):
-                self.sender.release(Segment(_HELD, start, end - start))
-        covered = sorted([*held, *(light.segment for light in holding if light.source is LightSource.DDP)], key=_start)
-        for light in holding:
+        lights = self.segment_lights
+        covered = sorted([*held, *(light.segment for light in lights if light.source is LightSource.DDP)], key=_start)
+        for light in lights:
             if light.source is LightSource.DDP:
                 continue
             for start, end in _uncovered(light.segment, covered):

@@ -57,14 +57,13 @@ SOLID_EFFECT: Final = "solid"
 
 
 class LightSource(StrEnum):
-    """What lights a DDP light's pixels: nothing, HA over DDP, the controller's running scene, or HA's held black
-    over a running scene (the light was turned off while the scene runs). The light is on for ``ddp`` and ``scene``.
+    """What lights a DDP light's pixels: nothing, or HA over DDP (the light is on). A controller scene never shares
+    the pixels with DDP: scene mode and DDP mode are exclusive, and in scene mode every DDP light is off. Stored in
+    restore data; an earlier version's ``scene`` and ``blanked`` read as not driven by DDP.
     """
 
     OFF = "off"
     DDP = "ddp"
-    SCENE = "scene"
-    BLANKED = "blanked"
 
 
 # Unique-ID suffix of the "All outputs" light, which spans the whole strip (entries with more than one segment).

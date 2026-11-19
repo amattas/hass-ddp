@@ -5,7 +5,7 @@
 | Type | Lights |
 |---|---|
 | Generic DDP | One DDP light per output. Works with any DDP controller; nothing else is created |
-| Minleon NDB-Pro | The DDP lights, plus a controller device with the **controller light** (its main entity), **Color 1** to **Color 5**, and **Scene**, and the `ddp.recall_preset` and `ddp.set_colors` actions (see [NDB-Pro built-in scenes](entities.md#ndb-pro-built-in-scenes)) |
+| Minleon NDB-Pro | The DDP lights, plus a controller device with the **controller light** (its main entity), **Color 1** to **Color 5**, and **Scene**, and the `ddp.recall_preset` and `ddp.set_colors` actions (see [NDB-Pro built-in scenes](entities.md#ndb-pro-built-in-scenes)). The controller's scenes and the DDP lights are exclusive: starting a scene turns the DDP lights off, turning a DDP light on turns the controller `Off` |
 
 The stored type decides: nothing probes the controller at startup. Adding another vendor's controller means one entry
 in the controller type registry (`custom_components/ddp/controller.py`) backed by that vendor's library.

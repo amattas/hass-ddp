@@ -1,11 +1,14 @@
 """Commands to a vendor controller, shared by the controller device's entities (main light, Scene, Color 1-5).
 
-Every command runs under the coordinator's lock (so a stale poll cannot undo it) and publishes what it changed. A
-command that starts a scene hands the pixels back from DDP once the controller took it: every DDP light shows the
-scene, sending nothing, and the held pixels follow (``DDPRuntime.sync_holds``). Turning the controller off blanks
-the DDP-driven segments first. The palette and intensity are the controller's own settings, so their commands leave
-DDP alone.
-``follow_poll`` is the coordinator's ``on_poll``: a scene started or stopped outside HA reaches the DDP lights.
+Every command runs under the coordinator's lock (so a stale poll cannot undo it) and publishes what it changed.
+
+Scene mode and DDP mode are exclusive (the controller cannot report a scene's pixels, so DDP pixels over a running
+scene could never be shown truthfully). A command that starts a scene hands the pixels back from DDP once the
+controller took it: every DDP light goes off without sending, and keepalive stops resending, so the controller's
+scene shows. A DDP light turned on while a scene runs first turns the controller off (``leave_scene``). Turning the
+controller off is its "Off" alone (in DDP mode it already is). The palette and intensity are the controller's own
+settings, so their commands change no mode.
+``follow_poll`` is the coordinator's ``on_poll``: a scene started outside HA turns the DDP lights off the same way.
 """
 
 from __future__ import annotations
@@ -15,10 +18,9 @@ from collections.abc import Sequence
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-from aioddp import DDPError
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
-from .const import COLOR_COOL_WHITE, COLOR_WARM_WHITE, CONTROLLER_OFF, DOMAIN, RGB, LightSource
+from .const import COLOR_COOL_WHITE, COLOR_WARM_WHITE, CONTROLLER_OFF, DOMAIN, RGB
 from .controller import (
     CONTROLLER_ERRORS,
     EMPTY_COLOR,
@@ -32,7 +34,6 @@ if TYPE_CHECKING:
     from . import DDPRuntime
 
 _LOGGER = logging.getLogger(__name__)
-ALL_SOURCES = tuple(LightSource)
 
 # A palette slot holds a custom color or one of the controller's whites (sent as its exact value).
 MODE_COLOR = "color"
@@ -83,33 +84,26 @@ class ControllerCommands:
                 await self.coordinator.controller.set_effect(effect)
             except CONTROLLER_ERRORS as err:
                 raise controller_error(entity_id, err) from err
-            await self._hand_back(entity_id)  # only once the controller took the command: a failure keeps the DDP look
+            await self._hand_back()  # only once the controller took the command: a failure keeps the DDP look
             self._publish(effect=effect)
 
     async def turn_off(self, entity_id: str | None) -> None:
-        """Fully dark: blank every DDP segment HA drives, show every DDP light off, then select the controller's
-        "Off". A segment that cannot be blanked does not stop the "Off"; its error is raised after.
-        """
-        runtime = self._runtime
-        segment_error: HomeAssistantError | None = None
+        """Select the controller's "Off". The DDP lights are off in scene mode, and in DDP mode it already is."""
         async with self.coordinator.lock:
-            for light in runtime.segment_lights:
-                try:
-                    await light.async_controller_off()
-                except HomeAssistantError as err:  # keep going: the controller's "Off" still darkens the rest
-                    segment_error = segment_error or err
-            try:
-                async with runtime.ownership:
-                    await self._sync_holds(entity_id)
-            except HomeAssistantError as err:
-                segment_error = segment_error or err
-            try:
-                await self.coordinator.controller.set_effect(CONTROLLER_OFF)
-            except CONTROLLER_ERRORS as err:
-                raise controller_error(entity_id, err) from err
-            self._publish(effect=CONTROLLER_OFF)
-        if segment_error is not None:
-            raise segment_error
+            await self._controller_off(entity_id)
+
+    async def leave_scene(self, entity_id: str | None) -> None:
+        """Before a DDP light drives pixels: turn the controller off if it runs a scene (raises ``controller_failed``
+        if it cannot, so nothing is sent). Caller holds the coordinator's lock."""
+        if self._runtime.scene_running:
+            await self._controller_off(entity_id)
+
+    async def _controller_off(self, entity_id: str | None) -> None:
+        try:
+            await self.coordinator.controller.set_effect(CONTROLLER_OFF)
+        except CONTROLLER_ERRORS as err:
+            raise controller_error(entity_id, err) from err
+        self._publish(effect=CONTROLLER_OFF)
 
     async def set_intensity(self, entity_id: str | None, percent: int) -> None:
         """Set the controller's intensity (1-100 %) for its scenes; it starts no scene."""
@@ -127,7 +121,7 @@ class ControllerCommands:
                 await self.coordinator.controller.recall_preset(preset - 1)
             except CONTROLLER_ERRORS as err:
                 raise controller_error(entity_id, err) from err
-            await self._hand_back(entity_id)
+            await self._hand_back()
             await self.coordinator.async_read_after_command()
 
     async def set_palette(
@@ -167,57 +161,26 @@ class ControllerCommands:
             self._publish(colors=tuple(colors))
 
     async def follow_poll(self, previous: SceneState | None, state: SceneState) -> None:
-        """Show on the DDP lights a scene started or stopped outside HA (the controller's own UI or schedule).
+        """A poll found the controller running a scene (started outside HA: its own UI, app or schedule): every DDP
+        light goes off, as when HA starts one. "Off" changes nothing: DDP lights keep running.
 
         The coordinator's ``on_poll``: it runs under the coordinator's lock before the poll publishes, so commands
-        never trigger it. A new scene takes every ``off`` and ``ddp`` light (blanked ones keep their black). Any poll
-        of a running scene also shows it on every ``off`` light that holds no pixels (released, so the controller
-        lights them again); ``ddp`` lights are then left alone, since DDP may be overriding that scene. "Off" turns
-        the lights showing or blanking a scene off and leaves ``ddp`` lights running.
+        never trigger it.
         """
-        if state.effect is None:
-            return
-        before = previous.effect if previous is not None else None
-        runtime = self._runtime
-        lights = runtime.segment_lights
-        sources: tuple[LightSource, ...] = (LightSource.OFF, LightSource.DDP)
-        target = LightSource.SCENE
-        if state.effect == CONTROLLER_OFF:
-            sources, target = (LightSource.SCENE, LightSource.BLANKED), LightSource.OFF
-        elif before is None or before == state.effect:
-            # Decided before any light changes: one light showing the scene would make the others stop holding.
-            off_lights_hold = runtime.off_lights_hold
-            lights = [light for light in lights if light.source is LightSource.OFF and not light.holds(off_lights_hold)]
-        async with runtime.ownership:
-            for light in lights:
-                await light.async_follow_scene(target, sources)
-            try:
-                await runtime.sync_holds()
-            except DDPError as err:  # the poll itself succeeded; the next change syncs again
-                _LOGGER.warning("Could not send black to the off DDP lights of %s: %s", self.coordinator.name, err)
+        if state.effect is not None and state.effect != CONTROLLER_OFF:
+            await self._hand_back()
 
     def _publish(self, **changes: Any) -> None:
         """Publish a commanded change as the coordinator's data, keeping everything the command did not change."""
         self.coordinator.publish(replace(self.coordinator.data or SceneState(None, None, ()), **changes))
 
-    async def _hand_back(self, entity_id: str | None) -> None:
-        """Show the scene on every DDP light without sending, and stop keepalive, so DDP stops overriding it."""
-        for light in self._runtime.segment_lights:
-            await light.async_follow_scene(LightSource.SCENE, ALL_SOURCES)
-        # A segment turned on mid-way (an HA scene applies lights concurrently) keeps its pixels and keepalive.
-        async with self._runtime.ownership:
-            await self._sync_holds(entity_id)
-
-    async def _sync_holds(self, entity_id: str | None) -> None:
-        """``DDPRuntime.sync_holds`` after a command; a failed black frame is the commanding entity's error."""
-        try:
-            await self._runtime.sync_holds()
-        except DDPError as err:
-            raise HomeAssistantError(
-                translation_domain=DOMAIN,
-                translation_key="send_failed",
-                translation_placeholders={"entity": str(entity_id), "error": str(err)},
-            ) from err
+    async def _hand_back(self) -> None:
+        """Scene mode: every DDP light off without sending, and nothing held, so DDP stops overriding the scene."""
+        runtime = self._runtime
+        async with runtime.ownership:
+            for light in runtime.segment_lights:
+                await light.async_hand_back()
+            runtime.sender.release()
 
 
 def controller_error(entity_id: str | None, err: Exception) -> HomeAssistantError:

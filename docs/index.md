@@ -32,7 +32,8 @@ for which controllers have been exercised.
   scenes.
 - Let the NDB-Pro play the shows stored on it on a schedule (sunset to 23:00) while Home Assistant stays in charge of
   the on/off times.
-- Take a section of the strip over for a one-off alert color (for example a doorbell flash) and hand it back after.
+- Flash an alert color (for example a doorbell) over DDP, then start the stored scene again: turning a DDP light on
+  stops the controller's scene.
 
 ## Known limitations
 
@@ -45,8 +46,10 @@ for which controllers have been exercised.
   the controller's saved settings.
 - **Segment light state is assumed.** Changes made elsewhere (another sender) are not seen; the controller's own scene
   starting or stopping is, at the next 30 s poll.
-- **Per-output disable during a scene is not verified on hardware.** If the NDB-Pro stops its effect on every output
-  while DDP writes to one, disabling one output freezes the scene on the others.
+- **No DDP pixels over a running scene.** The controller cannot report its scenes' pixels, so a scene and the DDP
+  lights are exclusive: turning a DDP light on stops the scene, starting a scene turns the DDP lights off.
+- **After a scene starts, the last DDP frame may linger.** HA stops sending at once; the NDB-Pro shows its scene again
+  when it notices DDP stopped, which may take up to its DDP timeout (about 20 s). Not measured on hardware yet.
 - **Setup cannot verify the controller over DDP.** It only checks that a UDP socket opens; a wrong host looks fine
   until a frame is sent and nothing lights up.
 - **The controller device needs the controller's HTTP UI on port 80** and only exists for vendor controller types.

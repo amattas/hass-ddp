@@ -161,6 +161,8 @@ class FakeController:
                     )
                 reply = b"OK"
             elif method == "GET" and path in self.pages:
+                if path == "/pshows.html" and "?r=" in target:  # recalling a preset runs its show
+                    self.select("Show1")
                 reply = self.pages[path].encode()
                 await asyncio.sleep(self.page_delay)
             else:

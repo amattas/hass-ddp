@@ -46,6 +46,9 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
 
 ## 2026-11-06: DDP lights reflect a running controller scene
 
+Superseded by 2026-11-19 (scene mode and DDP mode are exclusive).
+
+
 - Field test: while a controller scene ran, the DDP lights (Output 1/2, All outputs) showed off because they only
   ever showed what HA sent over DDP. Decided: they reflect the scene. Each DDP light has a source: `off`, `ddp`
   (HA drives it), `scene` (the controller's effect lights it; nothing is sent) or `blanked` (a scene runs but this
@@ -232,10 +235,53 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
   lighting its other pixels, could not be turned off without turning it on first (turn_off of an off light sends
   nothing). The first cut kept only a solid output on; a verifier found the scene and effect cases left the output
   showing off with lit pixels, so all three now stay on.
-- Blanking generalized from All outputs: a light with lights inside it (All outputs over the outputs and pixels, an
+- (Superseded 2026-11-19: no light is blanked any more.) Blanking generalized from All outputs: a light with lights inside it (All outputs over the outputs and pixels, an
   output over its pixel lights) is blanked only while one of them still is, and does not hold its black itself; the
   lights inside hold theirs. So un-blanking one pixel during a scene releases just that pixel.
 - Cost: overlap lists are computed once at setup (`DDPSegmentLight.link`), and `sync_holds` evaluates "off lights
   hold" once per sync (`DDPRuntime.off_lights_hold`, `DDPSegmentLight.holds`) instead of once per light. One frame is
   a segment-sized packet, so a pixel change sends 3 or 4 bytes, never a full strip; turning on all 122 pixel lights in
   one call takes about 50 ms in the test suite (122 packets plus the off outputs' black).
+
+## 2026-11-19: Scene mode and DDP mode are exclusive
+
+- Decided (user, after hardware checks): on a vendor controller entry (NDB-Pro) the controller's scenes and the DDP
+  lights never run together. Why: the controller cannot report the pixels of its own scenes (it answers no DDP query;
+  its HTTP API has no pixel readback), so DDP pixels over a running scene could never be shown truthfully, and that
+  mixed state caused most of the complexity and the bugs found (the `blanked` source, holds over a scene, freezing and
+  hand-offs over a scene). Losing "a few DDP pixels over a running scene" is accepted.
+- Scene mode: starting a scene from HA (controller light turn_on, Scene select, `ddp.recall_preset`) turns every DDP
+  light off (outputs, All outputs, pixel lights) once the controller took the command: runners stop, nothing is
+  sent, nothing is held (`ControllerCommands._hand_back`). A poll that finds a scene running does the same
+  (`follow_poll`), so a scene started in the controller's UI or app ends DDP mode within 30 s.
+- DDP mode: turning on any DDP light, or `ddp.set_pattern`, while the coordinator's state is a running scene first
+  selects the controller's "Off" (`ControllerCommands.leave_scene`, under the coordinator lock), then drives the
+  pixels. If that command fails, the action raises `controller_failed` and sends nothing. While the controller is Off
+  the DDP lights behave as on Generic DDP; a poll reading "Off" changes nothing.
+- Every DDP light change runs under the coordinator lock (then `ownership`, then the light's lock: the commands'
+  order), so a scene command or poll never interleaves with it (`DDPSegmentLight._exclusive`). Generic DDP entries
+  take only `ownership`, as before.
+- The controller light's turn_off is the controller's "Off" alone: in scene mode the DDP lights are already off, and
+  in DDP mode the controller already is, so blanking the DDP-driven segments was dead and is removed. Palette
+  changes (Color 1-5, `ddp.set_colors`) and the intensity change no mode.
+- Startup: setup still only reads the controller (never commands or probes it). If the read state is a running scene,
+  the DDP lights restore off and send nothing; otherwise they restore and re-send as before. A stored source of
+  `scene` or `blanked` (earlier versions) reads as not driven by DDP, so it is never re-sent.
+- Keepalive resends only while some DDP light is on: then every DDP light's pixels are held (black for the off
+  ones); with none on, nothing is held. `sync_holds` loses its partial release (with every light holding and All
+  outputs spanning the strip, nothing held was ever outside a holding light).
+- Removed: the `scene` and `blanked` sources (`LightSource` is `off`/`ddp`; kept as an enum because restore data
+  stores it), un-blanking by a bare turn_on, a light deriving its source from the lights inside it, holds over a
+  running scene, `async_follow_scene`, `async_controller_off`, `idle`, `_normalize`, and per-light state writes of
+  the overlapping lights (no light derives its state from another now; hand-back and freeze write their own).
+- Kept, as they apply within DDP mode: the sharing rules between outputs, All outputs and pixel lights (2026-11-18:
+  a pixel light never turns its output off, an effect or pattern freezes on a pixel take, a repaint takes the pixel
+  lights' pixels, turning a light off turns the lights inside it off).
+- Supersedes: 2026-11-06 "DDP lights reflect a running controller scene" (all of it, including the held-pixels
+  notes about blanked lights and the hardware question about per-output disable, which no longer arises), the
+  controller-off blanking in 2026-11-06 "controller device entities" ("off = controller Off plus blanking the
+  DDP-driven segments"), and in 2026-11-18 the scene cases of the interaction rule (a light showing the scene stays
+  `scene`; blanking over a running scene; the generalized blanked-source paragraph).
+- Assumption, not measured on hardware: after HA stops sending (a scene command), the NDB-Pro shows its scene again
+  once it notices DDP stopped, possibly only after its DDP timeout (about 20 s). The code sends nothing to speed this
+  up; until then the last DDP frame may linger. The README says so.

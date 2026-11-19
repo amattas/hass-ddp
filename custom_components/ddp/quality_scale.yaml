@@ -89,7 +89,8 @@ rules:
   action-exceptions:
     status: done
     comment: |
-      Failed sends and controller errors raise HomeAssistantError; unknown effects, invalid set_pattern effects or
+      Failed sends and controller errors raise HomeAssistantError (a DDP light turned on during a scene whose
+      controller cannot be turned Off raises controller_failed and sends nothing); unknown effects, invalid set_pattern effects or
       params, a remembered scene the controller no longer lists, and set_pattern on a
       Color light raise ServiceValidationError. recall_preset and set_colors are light-domain services, so Home
       Assistant also calls them on DDP and Color lights, which refuse them (not_a_controller).

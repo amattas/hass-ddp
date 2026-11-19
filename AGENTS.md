@@ -25,11 +25,11 @@ one registry entry). See `DECISIONS.md`.
   (`None` for Generic), its `DDPScenesCoordinator` and `ControllerCommands`; `async_migrate_entry` (1 -> 2).
   `PLATFORMS` = light, number, select, switch
 - `commands.py`: `ControllerCommands`, the controller commands shared by the controller device's entities (turn on
-  with an effect, turn off = the controller's Off plus blanking the DDP-driven segments, recall a preset, set the
-  intensity, the palette or one slot). A command that
-  starts a scene hands the pixels back from DDP once the controller took it; `follow_poll` (the coordinator's
-  `on_poll` hook) does the same for changes made outside HA. Everything runs under the coordinator lock and publishes
-  the result
+  with an effect, turn off = the controller's Off, recall a preset, set the intensity, the palette or one slot). Scene
+  mode and DDP mode are exclusive (DECISIONS.md 2026-11-19): a command that starts a scene turns every DDP light off
+  once the controller took it (`_hand_back`, nothing sent, nothing held); `follow_poll` (the coordinator's `on_poll`
+  hook) does the same for a scene started outside HA; `leave_scene` turns the controller Off before a DDP light
+  drives pixels. Everything runs under the coordinator lock and publishes the result
 - `coordinator.py`: `DDPScenesCoordinator` (30 s poll of the controller state and palette); `lock` serializes polls and
   commands, so a stale poll cannot undo a command; `on_poll`; `last_effect`. `diagnostics.py`: redacted entry, sender,
   and controller documents
@@ -47,8 +47,9 @@ one registry entry). See `DECISIONS.md`.
   prefilled from the read layout (stored names kept per key, its device info stored) or else the stored segments;
   options flow (cap, color order, fps, keepalive, `pixel_lights`)
 - `light.py`: `DDPSegmentLight` (`LightEntity` + `RestoreEntity`), RGB or RGBW color mode from the entry's data type,
-  aioddp effects, `ddp.set_pattern` (kept in restore state); a `source` of `off`/`ddp`/`scene`/`blanked` (see
-  DECISIONS.md 2026-11-06); `AllOutputsLight` over the whole strip when there is more than one segment (DDP lights
+  aioddp effects, `ddp.set_pattern` (kept in restore state); a `source` of `off`/`ddp`; every change runs under
+  `_exclusive` (a vendor entry: the coordinator lock, leaving a running scene first, then `ownership`); restore sends
+  nothing while the controller runs a scene; `AllOutputsLight` over the whole strip when there is more than one segment (DDP lights
   that share pixels hand them to each other without sending); `PaletteLight` "Color 1".."Color 5", one palette slot
   each: RGB, or color temperature (2700 K warm, 6500 K cool) while it holds a white. `PixelLight` (option
   `pixel_lights`): one per pixel of every output, "<output> Light N" in physical order (a `reversed` output counts
