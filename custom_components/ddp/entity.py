@@ -12,6 +12,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import dt as dt_util
 
 from .commands import ControllerCommands
 from .const import (
@@ -124,6 +125,26 @@ class DDPEntity(Entity):
 def controller_device_parent(hass: HomeAssistant, entry: DDPConfigEntry) -> str:
     """The DDP device's registry ID, creating it if needed: the controller device is connected through it."""
     return dr.async_get(hass).async_get_or_create(config_entry_id=entry.entry_id, **ddp_device_info(entry)).id
+
+
+def register_output_device(hass: HomeAssistant, entry: DDPConfigEntry, info: DeviceInfo, name: str) -> None:
+    """Register output ``name``'s device (``info``). One the registry creates afresh starts in the DDP device's area
+    and, when the user renamed the DDP device, is named "<that name> <output name>": the output's lights moved off
+    the DDP device, so area targeting and their friendly names stay as they were. A device that exists, or that the
+    registry restores (deleted before: it keeps its own name, area and creation time), is left as the user set it."""
+    devices = dr.async_get(hass)
+    if devices.async_get_device_by_identifier(next(iter(info["identifiers"])), entry.entry_id) is not None:
+        return
+    before = dt_util.utcnow()
+    device = devices.async_get_or_create(config_entry_id=entry.entry_id, **info)
+    parent = devices.async_get(info["via_device_id"])  # the DDP device, registered before its output devices
+    if device.created_at < before or parent is None:  # restored, not created
+        return
+    devices.async_update_device(
+        device.id,
+        area_id=parent.area_id,
+        name_by_user=f"{parent.name_by_user} {name}" if parent.name_by_user else None,
+    )
 
 
 class ControllerEntity(CoordinatorEntity[DDPScenesCoordinator], DDPEntity):

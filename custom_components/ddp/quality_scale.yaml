@@ -136,7 +136,8 @@ rules:
       The DDP device (identifier: host; All outputs, and the output light with one output) with manufacturer, model,
       and firmware when the controller reports them. With several outputs each output has a device (identifier:
       host:<segment key>, named "<entry> <output name>", via_device_id the DDP device) holding its light (the main
-      entity) and its pixel lights. A vendor controller type adds a controller device (identifier: host:controller,
+      entity) and its pixel lights; a newly created one takes the DDP device's area and user-set name (plus the
+      output name), an existing or restored one is left alone. A vendor controller type adds a controller device (identifier: host:controller,
       named "<entry> <controller type>", via_device_id the DDP device) holding the controller light (its main entity), Color 1-5,
       and Scene; the DDP device is then named "<entry> Generic DDP".
   diagnostics:

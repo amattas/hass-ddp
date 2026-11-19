@@ -98,6 +98,7 @@ from .entity import (
     device_identifiers,
     output_device_info,
     output_identifier,
+    register_output_device,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -198,6 +199,8 @@ async def async_setup_entry(
             output.key: output_device_info(entry, output.key, output.name or output.key, parent)
             for output in runtime.segments
         }
+        for output in runtime.segments:
+            register_output_device(hass, entry, output_devices[output.key], output.name or output.key)
     lights = [DDPSegmentLight(entry, segment, output_devices.get(segment.key)) for segment in runtime.segments]
     if several:
         whole = Segment(STRIP_KEY, 0, runtime.sender.strip.pixel_count)

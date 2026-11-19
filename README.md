@@ -45,6 +45,11 @@ are on the DDP device. A vendor controller type adds a controller device named a
 example "Front Yard Minleon NDB-Pro"), connected through the DDP device, with the main light, Color 1 to 5, and Scene
 on it; the DDP device is then named after the entry and Generic DDP ("Front Yard Generic DDP").
 
+A new output device starts in the DDP device's area, and if you renamed the DDP device (say "My Strip"), it is named
+after that name and the output ("My Strip Output 1"), so after upgrading from 0.6.0 the lights stay in their area and
+keep their names. Area and name you set on an output device later are kept, also when the output is removed and comes
+back.
+
 Actions: `ddp.set_pattern` (DDP lights: the outputs and All outputs, not the pixel lights), and `ddp.recall_preset` and `ddp.set_colors`
 (the NDB-Pro controller light only). Home Assistant's `light.turn_on` and `light.turn_off` work on every light, and scenes capture the segment lights.
 The integration provides no triggers or conditions.

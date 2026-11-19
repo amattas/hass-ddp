@@ -328,7 +328,16 @@ Superseded by 2026-11-19 (scene mode and DDP mode are exclusive).
   there (`OutputPixelLight`, translation key `output_pixel`).
 - Upgrade: entities keep their unique IDs and their registry entity IDs (a vendor entry keeps
   `light.<title>_generic_ddp_output_1`); only their device changes, which HA applies when the entity is added. New
-  entities of a vendor entry get IDs from the new device name (`light.<title>_output_1`).
+  entities get IDs from the new device name (`light.<title>_output_1`; Home Assistant also prefixes the area of a
+  device that is in one).
+- What the user set on the DDP device carries over (verifier finding: an upgraded DDP device in area "Garden" named
+  "My Strip" left 124 of 125 lights outside the area and renamed them "NDB-Pro Output 2 ..."): when the registry
+  creates an output device afresh (`register_output_device`, at light setup), it gets the DDP device's area and, if
+  the DDP device has a user-set name, the user-set name "<that name> <output name>", so the lights' friendly names
+  stay ("My Strip Output 2 Light 5"). Without a user-set name it keeps its default name. A device that already
+  exists, or that the registry restores (HA keeps a removed device's name and area, so 2 -> 1 -> 2 outputs brings
+  back the user's settings; a re-added entry's orphans too), is never changed: what the user sets on an output
+  device later is theirs. Lights with their own area or name are untouched.
 - Stale devices: light setup removes every device of the entry it no longer wants (output devices of dropped
   outputs, all of them once a single output is left, the controller device after a switch to Generic DDP). A light
   setup still creates is detached from the device first (`device_id=None`), so the device's removal does not take
