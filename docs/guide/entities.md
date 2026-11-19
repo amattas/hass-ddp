@@ -6,16 +6,17 @@
 |---|---|
 | **Output N** light (one per output defined at setup; an entry from before 0.5.0 has a single **All** light until it is reconfigured) | On/off, brightness, RGB color (RGBW color for an RGBW entry), the aioddp effects, and multi-color patterns (`ddp.set_pattern`). Sends DDP; its state is assumed. While a controller scene runs it shows on (the scene), and turning it off disables just that output |
 | **All outputs** light (only when the controller has more than one output) | The same as an output light, over the whole strip: a pattern or effect runs on across the outputs in one DDP frame |
+| **Output N Light 1** to **Light N** (with the **One light per pixel** option; one per pixel of every output) | One pixel each: on/off, brightness, and color (RGBW for an RGBW entry); no effects or patterns. Numbered along the installed string: Light 1 is the output's first pixel, or its last one on an output marked **Reversed**. Shares its pixel with its output light and All outputs (see below) |
 | **Controller** light (vendor controller types only; the controller device's main entity, named like the device) | On while the controller runs a scene. On brings back the last scene (else the first), also after a restart; brightness is the controller's own intensity (1-100%), and turn_on with a brightness sets it. Off is the controller's `Off` and blanks the DDP lights too. Its `colors` and `background` attributes are the controller's palette (the colors its effects use), set with `ddp.set_colors`; `ddp.recall_preset` plays a stored preset. Polled |
 | **Color 1** to **Color 5** lights (controller device) | One palette slot each; off empties the slot. A Color tab for a custom color (brightness shows 255 and scales the color a turn_on sends) and a Temperature tab, a continuous 2700-6500 K range: the ends are the controller's white LEDs, between them is a color |
 | **Scene** select (controller device) | The controller's built-in effects and shows; the running one is selected, none while it is `Off`. Selecting one runs it and hands the pixels back from DDP |
 
-**Devices.** The output lights and All outputs are on the DDP device, named after the entry. A vendor controller type
+**Devices.** The output lights, All outputs and the pixel lights are on the DDP device, named after the entry. A vendor controller type
 adds a controller device named after the entry and the type (for example "Front Yard Minleon NDB-Pro"), connected
 through the DDP device, with the main light, Color 1 to 5, and Scene on it; the DDP device is then named
 after the entry and Generic DDP ("Front Yard Generic DDP").
 
-Actions: `ddp.set_pattern` (DDP lights: the outputs and All outputs), and `ddp.recall_preset` and `ddp.set_colors`
+Actions: `ddp.set_pattern` (DDP lights: the outputs and All outputs, not the pixel lights), and `ddp.recall_preset` and `ddp.set_colors`
 (the NDB-Pro controller light only). Home Assistant's `light.turn_on` and `light.turn_off` work on every light, and scenes
 capture the segment lights. The integration provides no triggers or conditions.
 
@@ -23,6 +24,14 @@ capture the segment lights. The integration provides no triggers or conditions.
 stops the output lights' effects and shows them off, without sending anything; turning an output light on does the same
 to All outputs. Nothing is blanked: the newly turned-on light simply draws over its own pixels, and an output that All
 outputs had lit keeps that frame until something else sends to it.
+
+**Pixel lights share their pixel** with their output light and All outputs, and the last write wins per pixel.
+Coloring a pixel light changes only that pixel: an output (or All outputs) showing a solid color stays on and keeps
+lighting its other pixels, while one running an effect or a pattern stops (it would paint over the pixel) and shows
+off. Turning the output light on again, or giving it a color or an effect, repaints all its pixels, and the pixel
+lights on it show off. Turning the output light off blanks its pixels, so its pixel lights go off too. Turning a pixel
+light off sends black for that pixel only; while a controller scene runs, it is held black and a bare turn_on hands
+the pixel back to the scene, as for an output.
 
 ## RGBW
 

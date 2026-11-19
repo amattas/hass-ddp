@@ -18,6 +18,7 @@ from homeassistant.const import CONF_HOST, CONF_NAME
 from homeassistant.core import callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.selector import (
+    BooleanSelector,
     NumberSelector,
     NumberSelectorConfig,
     NumberSelectorMode,
@@ -42,6 +43,7 @@ from .const import (
     CONF_MANUFACTURER,
     CONF_MODEL,
     CONF_PIXEL_COUNT,
+    CONF_PIXEL_LIGHTS,
     CONF_SEGMENTS,
     DATA_TYPE_RGB,
     DATA_TYPE_RGBW,
@@ -51,12 +53,14 @@ from .const import (
     DEFAULT_FPS,
     DEFAULT_HTTP_PORT,
     DEFAULT_KEEPALIVE,
+    DEFAULT_PIXEL_LIGHTS,
     DOMAIN,
     MAX_KEEPALIVE,
     MIN_KEEPALIVE,
     SEGMENT_KEY,
     SEGMENT_LENGTH,
     SEGMENT_NAME,
+    SEGMENT_REVERSED,
     SEGMENT_START,
 )
 from .controller import CONTROLLER_TYPES, TYPE_GENERIC, detect, fetch_layout
@@ -95,15 +99,22 @@ def _manual_schema(data_type: str, outputs: int) -> probatio.Schema:
     )
 
 
-def _output_schema(name: str, first: int, last: int) -> probatio.Schema:
-    """The output step's schema: name and 1-based inclusive pixel range, these defaults prefilled."""
+def _output_schema(name: str, first: int, last: int, reverse: bool) -> probatio.Schema:
+    """The output step's schema: name, 1-based inclusive pixel range and whether the controller reverses the output,
+    these defaults prefilled."""
     return probatio.Schema(
         {
             probatio.Required(CONF_NAME, default=name): TextSelector(),
             probatio.Required(CONF_FIRST_PIXEL, default=first): PIXEL_SELECTOR,
             probatio.Required(CONF_LAST_PIXEL, default=last): PIXEL_SELECTOR,
+            probatio.Required(SEGMENT_REVERSED, default=reverse): BooleanSelector(),
         }
     )
+
+
+def _reversed(reverse: bool) -> dict[str, bool]:
+    """The segment's ``reversed`` entry: stored only when set, so an unreversed output keeps the old shape."""
+    return {SEGMENT_REVERSED: True} if reverse else {}
 
 
 def _range_error(first: int, last: int, segments: list[dict[str, Any]]) -> str | None:
@@ -158,7 +169,8 @@ async def _read_layout(host: str, controller_type: str, http_port: int) -> Contr
 def _layout_data(layout: ControllerLayout | None) -> dict[str, Any] | None:
     """Entry data for a usable layout (a drivable data type and active outputs), else ``None``.
 
-    Segment keys are the layout's segment names, so an output that stays keeps its entity's unique ID.
+    Segment keys are the layout's segment names, so an output that stays keeps its entity's unique ID; an output the
+    controller reverses (``rev``) is marked reversed.
     """
     if layout is None or layout.data_type is None or not layout.active_outputs:
         return None
@@ -168,6 +180,7 @@ def _layout_data(layout: ControllerLayout | None) -> dict[str, Any] | None:
             SEGMENT_NAME: f"Output {output.index + 1}",
             SEGMENT_START: segment.start,
             SEGMENT_LENGTH: segment.length,
+            **_reversed(output.reversed_by_controller),
         }
         for output, segment in zip(layout.active_outputs, layout.segments(), strict=True)
     ]
@@ -257,8 +270,8 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
 
         A vendor type re-reads the layout and prefills the manual and output steps from it (data type, outputs), so
         switching the controller between 3- and 4-channel input takes effect; an output whose key is stored keeps its
-        stored name, and the layout's device info is stored. Generic DDP, or a type that gives no layout, prefills
-        them from the stored data type and outputs.
+        stored name (its reversed flag is the layout's, like its range), and the layout's device info is stored.
+        Generic DDP, or a type that gives no layout, prefills them from the stored data type and outputs.
         """
         entry = self._get_reconfigure_entry()
         http_port = entry.data.get(CONF_HTTP_PORT, DEFAULT_HTTP_PORT)
@@ -369,6 +382,7 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
                     SEGMENT_NAME: user_input[CONF_NAME].strip() or f"Output {index + 1}",
                     SEGMENT_START: first - 1,
                     SEGMENT_LENGTH: last - first + 1,
+                    **_reversed(bool(user_input.get(SEGMENT_REVERSED, False))),
                 }
                 if index + 1 < self._outputs:
                     self._segments.append(segment)
@@ -401,15 +415,22 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
                             CONF_CONTROLLER_TYPE: self._controller_type,
                         },
                     )
+        defaults: tuple[str, int, int, bool]
         if user_input is not None:
-            defaults = (user_input[CONF_NAME], int(user_input[CONF_FIRST_PIXEL]), int(user_input[CONF_LAST_PIXEL]))
+            defaults = (
+                user_input[CONF_NAME],
+                int(user_input[CONF_FIRST_PIXEL]),
+                int(user_input[CONF_LAST_PIXEL]),
+                bool(user_input.get(SEGMENT_REVERSED, False)),
+            )
         elif index < len(self._prefill):
             stored = self._prefill[index]
             start = stored[SEGMENT_START]
-            defaults = (stored[SEGMENT_NAME], start + 1, start + stored[SEGMENT_LENGTH])
+            reverse = bool(stored.get(SEGMENT_REVERSED, False))
+            defaults = (stored[SEGMENT_NAME], start + 1, start + stored[SEGMENT_LENGTH], reverse)
         else:
             first = max((s[SEGMENT_START] + s[SEGMENT_LENGTH] for s in self._segments), default=0) + 1
-            defaults = (f"Output {index + 1}", first, first + DEFAULT_OUTPUT_LENGTH - 1)
+            defaults = (f"Output {index + 1}", first, first + DEFAULT_OUTPUT_LENGTH - 1, False)
         return self.async_show_form(
             step_id="output",
             data_schema=_output_schema(*defaults),
@@ -424,7 +445,7 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
 
 
 class DDPOptionsFlow(OptionsFlowWithReload):
-    """Brightness cap, color order, effect fps, keepalive. Saving reloads the entry."""
+    """Brightness cap, color order, effect fps, keepalive, one light per pixel. Saving reloads the entry."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
@@ -439,6 +460,7 @@ class DDPOptionsFlow(OptionsFlowWithReload):
                         CONF_COLOR_ORDER: user_input[CONF_COLOR_ORDER],
                         CONF_FPS: int(user_input[CONF_FPS]),
                         CONF_KEEPALIVE: keepalive,
+                        CONF_PIXEL_LIGHTS: bool(user_input[CONF_PIXEL_LIGHTS]),
                     }
                 )
         data_type = self.config_entry.data[CONF_DATA_TYPE]
@@ -447,6 +469,7 @@ class DDPOptionsFlow(OptionsFlowWithReload):
             CONF_COLOR_ORDER: DEFAULT_COLOR_ORDER[data_type],
             CONF_FPS: DEFAULT_FPS,
             CONF_KEEPALIVE: DEFAULT_KEEPALIVE,
+            CONF_PIXEL_LIGHTS: DEFAULT_PIXEL_LIGHTS,
             **self.config_entry.options,
             **(user_input or {}),
         }
@@ -468,6 +491,7 @@ class DDPOptionsFlow(OptionsFlowWithReload):
                         min=0, max=MAX_KEEPALIVE, step=0.1, unit_of_measurement="s", mode=NumberSelectorMode.BOX
                     )
                 ),
+                probatio.Required(CONF_PIXEL_LIGHTS): BooleanSelector(),
             }
         )
         return self.async_show_form(

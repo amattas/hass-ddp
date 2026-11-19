@@ -196,3 +196,39 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
   light keeps its unique ID; an output beyond the prefilled ones gets the first free `output<N>` from its position.
 - For a vendor type the ranges should normally match the controller's own port setup, since the controller maps the
   DDP channels to its ports; the forms say so, but the flow does not enforce it.
+
+## 2026-11-18: One light per pixel, numbered in physical order
+
+- Field request: address single pixels of the NDB-Pro (122 RGB pixels: output 1 = 80, output 2 = 42, the controller
+  reverses one port itself). Decided: an opt-in option "One light per pixel" (`pixel_lights`, default off: 122 more
+  entities would swamp everyone else). On, every output gets "<output name> Light 1".."Light N" (translation key
+  `pixel`, name "{output} Light {number}"), on the DDP device; off, the reload's stale-light pruning removes them.
+- Pixel lights are DDP lights over a one-pixel segment (`PixelLight`, a `DDPSegmentLight`), so they share the
+  source, hand-off, hold, keepalive and restore machinery: on/off, brightness, RGB or RGBW color. No effects, and
+  `ddp.set_pattern` on one is refused (`pixel_light_pattern`; `not_a_ddp_light` would read wrong, it is a DDP light).
+- Physical order: Light N is the N-th pixel along the installed string. Each stored segment may carry
+  `reversed: true` (stored only when true; absent means false, so existing entries load unchanged, no migration):
+  then Light N is DDP pixel `start + length - N`, else `start + N - 1`. What DDP sends is unchanged. The flow prefills
+  it from the layout (`OutputInfo.reversed_by_controller`, the NDB-Pro's per-port `rev`) and the output step has a
+  "Reversed" box (Generic DDP users set it by hand). Reconfigure prefilled from a layout takes the layout's flag (like
+  the range; only the name is kept from the entry); prefilled from the stored segments it keeps the stored flag.
+- Unique IDs are `<entry>_<segment key>_pixel<N>` with N the physical number, so flipping the flag keeps the
+  entities (they map to the other end). Not verified on hardware: whether the NDB-Pro's `rev` puts DDP pixel
+  `start + length - 1` at the string's start. If Light 1 lights the far end, the user unticks Reversed; the README
+  says so.
+- Interaction rule (ownership, generalized): last write wins per pixel. A pixel light taking its pixel hands back
+  the overlapping lights as an output does, except a solid `ddp` one (no effect or pattern, so nothing repaints the
+  pixel): its other pixels still show its color, so it stays on. An effect or pattern would overwrite the pixel on its
+  next frame, so that light's runner stops and it shows off (sending nothing), as today. Repainting an output (any
+  turn_on) takes its pixels from its pixel lights (they show off, as All outputs does to an output today). Turning a
+  light off over DDP now also shows the `ddp` lights inside it off, since its black covers their pixels (before, an
+  output inside All outputs could never be `ddp` while All outputs was, so nothing changes for them). Why not the plain
+  rule: an output that showed off after one of its pixels changed, while still lighting 41 pixels, could not be
+  turned off without turning it on first.
+- Blanking generalized from All outputs: a light with lights inside it (All outputs over the outputs and pixels, an
+  output over its pixel lights) is blanked only while one of them still is, and does not hold its black itself; the
+  lights inside hold theirs. So un-blanking one pixel during a scene releases just that pixel.
+- Cost: overlap lists are computed once at setup (`DDPSegmentLight.link`), and `sync_holds` evaluates "off lights
+  hold" once per sync (`DDPRuntime.off_lights_hold`, `DDPSegmentLight.holds`) instead of once per light. One frame is
+  a segment-sized packet, so a pixel change sends 3 or 4 bytes, never a full strip; turning on all 122 pixel lights in
+  one call takes about 50 ms in the test suite (122 packets plus the off outputs' black).

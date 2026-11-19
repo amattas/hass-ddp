@@ -47,6 +47,7 @@ from .const import (
     SEGMENT_KEY,
     SEGMENT_LENGTH,
     SEGMENT_NAME,
+    SEGMENT_REVERSED,
     SEGMENT_START,
     SERVICE_RECALL_PRESET,
     SERVICE_SET_COLORS,
@@ -76,11 +77,13 @@ _PALETTE_COLOR = probatio.Any(_RGB, probatio.All(probatio.In(NAMED_COLORS), NAME
 @dataclass(frozen=True, slots=True)
 class SegmentConfig:
     """One light's slice of the strip: ``key`` is stable (unique IDs), ``name`` is for display (``None``: the
-    entity's translated name)."""
+    entity's translated name). ``reversed``: the controller reverses this output, so its pixel lights count from its
+    last DDP pixel (what DDP sends is unchanged)."""
 
     key: str
     name: str | None
     segment: Segment
+    reversed: bool = False
 
 
 @dataclass(slots=True)
@@ -89,7 +92,8 @@ class DDPRuntime:
 
     ``controller`` drives a vendor controller's built-in effects (``None`` for Generic DDP), ``scenes`` polls it and
     ``commands`` (the controller device's entities share them) command it.
-    ``segment_lights`` is every DDP light (the per-output lights and, with several outputs, All outputs), so a
+    ``segment_lights`` is every DDP light (the per-output lights, with several outputs All outputs, and with the
+    pixel lights option one light per pixel), so a
     controller command can hand the pixels back from DDP. ``ownership`` serializes a DDP light taking pixels that
     another DDP light shares. The sender keeps resending (keepalive) only the pixels it holds (``DDPSender.held``), and
     ``sync_holds`` makes them follow the lights' state.
@@ -110,6 +114,11 @@ class DDPRuntime:
         """A controller scene lights some of the DDP lights' pixels (shown, or blanked by HA's held black)."""
         return any(light.source in (LightSource.SCENE, LightSource.BLANKED) for light in self.segment_lights)
 
+    @property
+    def off_lights_hold(self) -> bool:
+        """An off DDP light holds black: no scene runs and another light drives DDP."""
+        return not self.scene_running and any(light.source is LightSource.DDP for light in self.segment_lights)
+
     async def sync_holds(self) -> None:
         """Make the held pixels exactly those of the lights that hold (``holding``). Caller holds ``ownership``.
 
@@ -119,7 +128,8 @@ class DDPRuntime:
         is held. A ``ddp`` light's pixels count as covered even before its runner's first frame, so they never get
         black. Raises ``DDPError``.
         """
-        holding = [light for light in self.segment_lights if light.holding]
+        off_lights_hold = self.off_lights_hold  # once, not per light: there may be a light per pixel
+        holding = [light for light in self.segment_lights if light.holds(off_lights_hold)]
         if not holding:
             self.sender.release()
             return
@@ -253,7 +263,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
             translation_placeholders={"host": entry.data[CONF_HOST], "error": str(err)},
         ) from err
     segments = [
-        SegmentConfig(s[SEGMENT_KEY], s[SEGMENT_NAME], Segment(s[SEGMENT_KEY], s[SEGMENT_START], s[SEGMENT_LENGTH]))
+        SegmentConfig(
+            s[SEGMENT_KEY],
+            s[SEGMENT_NAME],
+            Segment(s[SEGMENT_KEY], s[SEGMENT_START], s[SEGMENT_LENGTH]),
+            bool(s.get(SEGMENT_REVERSED, False)),
+        )
         for s in entry.data[CONF_SEGMENTS]
     ]
     scenes = DDPScenesCoordinator(hass, entry, controller) if controller is not None else None

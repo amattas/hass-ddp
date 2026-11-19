@@ -57,8 +57,9 @@ rules:
   entity-unique-id:
     status: done
     comment: |
-      Unique IDs are <config entry id>_<segment key>, <config entry id>_strip for All outputs, and on the controller
-      device <config entry id>_controller (the main light), _color_1 to _color_5, and _scene. The 0.4.x Power switch,
+      Unique IDs are <config entry id>_<segment key>, <config entry id>_strip for All outputs,
+      <config entry id>_<segment key>_pixel<N> for pixel light N (physical number, so a flipped Reversed flag keeps
+      them), and on the controller device <config entry id>_controller (the main light), _color_1 to _color_5, and _scene. The 0.4.x Power switch,
       Intensity number, and Mode selects are gone; setup removes their registry entries.
   has-entity-name:
     status: done
@@ -182,11 +183,13 @@ rules:
     comment: The light and select platforms have no device classes; the controller light is a brightness-only light.
   entity-disabled-by-default:
     status: exempt
-    comment: Every entity is a primary control (a light or Scene) that users want enabled.
+    comment: |
+      Every entity is a primary control (a light or Scene) that users want enabled. The per-pixel lights, which
+      would be numerous, are not created at all unless the "One light per pixel" option is on.
   entity-translations:
     status: done
     comment: |
-      All outputs, Color 1-5 ("Color {slot}"), and Scene
+      All outputs, Color 1-5 ("Color {slot}"), the pixel lights ("{output} Light {number}"), and Scene
       are named by translation; the controller light takes
       the device's name. Segment lights carry the output name entered in the flow (prefilled from the
       controller's layout) and stored with the entry (Output 1, All), which is user data rather than a fixed string.
@@ -196,7 +199,7 @@ rules:
   icon-translations:
     status: done
     comment: |
-      icons.json has All outputs, Color 1-5, the controller light, Scene, and every action; segment lights use
+      icons.json has All outputs, Color 1-5, the pixel lights, the controller light, Scene, and every action; segment lights use
       the default light icon.
   reconfiguration-flow:
     status: done
@@ -215,7 +218,8 @@ rules:
     comment: |
       Reconfiguring to Generic DDP removes the controller device with its entities; a reconfigure that drops an
       output (the layout lost it, or the user removed it in the output steps) removes that output's light (and All
-      outputs once one output is left). The DDP device goes away with the entry.
+      outputs once one output is left), and turning the pixel lights option off removes the pixel lights. The DDP
+      device goes away with the entry.
 
   # Platinum
   async-dependency:

@@ -43,6 +43,7 @@
 | Output name | Add, Reconfigure | One per output; names the light |
 | First pixel | Add, Reconfigure | 1-based, inclusive, across the whole controller. Outputs may not overlap; gaps are allowed |
 | Last pixel | Add, Reconfigure | Inclusive; the highest one sets the pixel count |
+| Reversed | Add, Reconfigure | The controller reverses this output, so its [pixel lights](entities.md#lights) count from the other end (Light 1 is the range's last pixel). Changes nothing DDP sends. Prefilled from the controller's layout (the NDB-Pro's per-port reverse setting); set it by hand on a Generic DDP controller |
 
 DDP is send-only UDP with no acknowledgement, so setup can only check that a socket opens. Setup never sends a frame,
 and reloading or removing the integration never blanks the lights.
@@ -53,7 +54,7 @@ and reloading or removing the integration never blanks the lights.
 and re-reads the output layout the same way adding does (a DDP query, then the controller type's own API). The form
 shows the stored pixel type and the layout the controller reports now. Submitting always continues to the same pixel
 type, outputs, and per-output steps as adding. When the controller reports a layout they are prefilled from it (its
-pixel type, outputs and ranges, keeping the names you gave the outputs), and its device info is stored; so after
+pixel type, outputs, ranges and reversed ports, keeping the names you gave the outputs), and its device info is stored; so after
 switching an NDB-Pro between a 3-channel and a 4-channel input mode, reconfigure the entry to follow it. For
 **Generic DDP**, or when the controller reports no layout, they are prefilled with the stored outputs. Change the
 ranges, add or remove outputs: outputs that are still there keep their lights; an output that is gone loses its light

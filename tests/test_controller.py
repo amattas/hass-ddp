@@ -754,27 +754,58 @@ async def test_all_outputs_turned_off_during_a_scene_blanks_the_strip(
     assert await _keepalive_ranges(udp_listener) == set()
 
 
+async def test_a_pixel_light_unblanked_during_a_scene_releases_its_pixel_only(
+    hass: HomeAssistant,
+    udp_listener: Listener,
+    fake_controller: FakeController,
+    entry_factory: Callable[..., MockConfigEntry],
+) -> None:
+    entry = entry_factory(controller=fake_controller, options={"keepalive": 0.5, "pixel_lights": True})
+    await _setup(hass, entry)
+    await _turn_on_scene(hass)
+    pixel = f"{OUT2}_light_1"  # DDP pixel 80
+
+    # Output 2 off during the scene: black held on its pixels, and its pixel lights are blanked with it.
+    await _call(hass, SERVICE_TURN_OFF, OUT2)
+    assert [_state(hass, e).state for e in (OUT2, pixel)] == [STATE_OFF, STATE_OFF]
+    # One pixel back to the scene: only that pixel is released; the output stays off while a pixel is still blanked.
+    await _call(hass, SERVICE_TURN_ON, pixel)
+    assert [_state(hass, e).state for e in (OUT2, pixel)] == [STATE_OFF, STATE_ON]
+    assert await _keepalive_ranges(udp_listener) == {(OUT2_OFFSET + 3, 41 * 3)}
+    # A bare turn_on of the output hands every pixel of it back.
+    await _call(hass, SERVICE_TURN_ON, OUT2)
+    assert [_state(hass, e).state for e in (OUT2, pixel, f"{OUT2}_light_42")] == [STATE_ON] * 3
+    assert await _keepalive_ranges(udp_listener) == set()
+    assert_holds_follow_lights(entry.runtime_data)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 @pytest.mark.parametrize("seed", range(6))
 @pytest.mark.parametrize("concurrent", [False, True], ids=["sequential", "gather"])
 async def test_held_pixels_follow_the_light_states(
     hass: HomeAssistant,
     udp_listener: Listener,
     fake_controller: FakeController,
-    fast_keepalive_entry: MockConfigEntry,
+    entry_factory: Callable[..., MockConfigEntry],
     seed: int,
     concurrent: bool,
 ) -> None:
     # Random commands and polls (fixed seeds), one at a time or two or three at once (an HA scene applies lights
     # concurrently): once they settle the sender holds exactly the pixels of the lights that hold, and a light showing
-    # the scene has no pixel held but those a light sharing them drives or blanks.
-    runtime = fast_keepalive_entry.runtime_data
+    # the scene has no pixel held but those a light sharing them drives or blanks. Odd seeds add pixel lights (each
+    # output's first and last, and one in between) to the lights the commands pick from.
+    pixels = seed % 2 == 1
+    entry = entry_factory(controller=fake_controller, options={"keepalive": 0.5, "pixel_lights": pixels})
+    await _setup(hass, entry)
+    targets = DDP_LIGHTS + ([f"{OUT1}_light_1", f"{OUT1}_light_80", f"{OUT2}_light_7"] if pixels else [])
+    runtime = entry.runtime_data
     sender, strip = runtime.sender, runtime.sender.strip
     rng = random.Random(seed)  # noqa: S311
     ops: list[Callable[[str], Awaitable[None]]] = [
         lambda e: _select(hass, rng.choice(["Show1", "Test"])),
         lambda e: _off(hass),
-        lambda e: _poll_after(fake_controller, fast_keepalive_entry, rng.choice(["Show1", "Test", "Off"])),
-        lambda e: _poll(fast_keepalive_entry),
+        lambda e: _poll_after(fake_controller, entry, rng.choice(["Show1", "Test", "Off"])),
+        lambda e: _poll(entry),
         lambda e: _call(hass, SERVICE_TURN_ON, e, effect="chase"),
         lambda e: _call(hass, SERVICE_TURN_ON, e, rgb_color=(255, 0, 0)),
         lambda e: _call(hass, SERVICE_TURN_ON, e),
@@ -783,7 +814,7 @@ async def test_held_pixels_follow_the_light_states(
     ]
     for step in range(40):
         count = rng.randint(2, 3) if concurrent else 1
-        await asyncio.gather(*(rng.choice(ops)(rng.choice(DDP_LIGHTS)) for _ in range(count)))
+        await asyncio.gather(*(rng.choice(ops)(rng.choice(targets)) for _ in range(count)))
         await udp_listener.settle()  # an effect's first frame
         assert_holds_follow_lights(runtime, step)
         lights = runtime.segment_lights
@@ -792,6 +823,7 @@ async def test_held_pixels_follow_the_light_states(
             if light.source is LightSource.SCENE:
                 taken = [o.segment for o in lights if o.source in (LightSource.DDP, LightSource.BLANKED)]
                 assert held & bytes_of(strip, [light.segment]) <= bytes_of(strip, taken), (light.entity_id, step)
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 async def _poll_after(fake_controller: FakeController, entry: MockConfigEntry, effect: str) -> None:

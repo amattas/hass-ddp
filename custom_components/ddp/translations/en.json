@@ -39,12 +39,14 @@
         "data": {
           "name": "Name",
           "first_pixel": "First pixel",
-          "last_pixel": "Last pixel"
+          "last_pixel": "Last pixel",
+          "reversed": "Reversed"
         },
         "data_description": {
           "name": "The light's name.",
           "first_pixel": "First pixel of this output, counting from 1.",
-          "last_pixel": "Last pixel of this output, included."
+          "last_pixel": "Last pixel of this output, included.",
+          "reversed": "The controller reverses this output, so its pixel lights count from the other end: Light 1 is the last pixel of the range. It does not change what DDP sends. Prefilled from the controller's layout when it reports one; set it by hand for a Generic DDP controller that reverses the port."
         }
       },
       "reconfigure": {
@@ -79,13 +81,15 @@
           "brightness_cap": "Brightness cap",
           "color_order": "Color order",
           "fps": "Effect frame rate",
-          "keepalive": "Keepalive interval"
+          "keepalive": "Keepalive interval",
+          "pixel_lights": "One light per pixel"
         },
         "data_description": {
           "brightness_cap": "Maximum output as a percent of full. Every frame is capped, including effects.",
           "color_order": "Channel order the pixels expect on the wire.",
           "fps": "Frames per second for animated effects.",
-          "keepalive": "Re-send the current frame this often, in seconds, so the controller doesn't fall back to its built-in effect (the NDB-Pro does after about 20 s without DDP). 0 turns it off; otherwise at least 0.5."
+          "keepalive": "Re-send the current frame this often, in seconds, so the controller doesn't fall back to its built-in effect (the NDB-Pro does after about 20 s without DDP). 0 turns it off; otherwise at least 0.5.",
+          "pixel_lights": "Add a light for every pixel of every output (\"Output 1 Light 1\" and so on, counted from the start of the installed string), next to the output lights, to turn single pixels on and off and color them. A 122-pixel controller gets 122 more lights. Turning it off removes them."
         }
       }
     },
@@ -140,6 +144,9 @@
     },
     "palette_not_a_controller": {
       "message": "{entity} is not the controller light; set_colors works only on the light named like the controller device."
+    },
+    "pixel_light_pattern": {
+      "message": "{entity} is a single pixel, so it shows one color; set_pattern works only on a DDP output light or All outputs."
     }
   },
   "services": {
@@ -211,6 +218,9 @@
             "name": "Background"
           }
         }
+      },
+      "pixel": {
+        "name": "{output} Light {number}"
       }
     },
     "select": {

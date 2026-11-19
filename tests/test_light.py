@@ -46,6 +46,12 @@ ALL = "light.ndb_pro_all_outputs"
 OUT2_OFFSET = 80 * 3
 RED, GREEN, BLUE = (255, 0, 0), (0, 255, 0), (0, 0, 255)
 WHITE_W = (0, 0, 0, 255)  # the white channel alone: an RGBW light's default look
+PIXEL_OPTIONS = {"pixel_lights": True, "keepalive": 0}  # one light per pixel; no keepalive resends to filter out
+
+
+def _pixel(output: int, number: int) -> str:
+    """Pixel light ``number`` (physical, 1-based) of output ``output``."""
+    return f"light.ndb_pro_output_{output}_light_{number}"
 
 
 def _color_attr(color: tuple[int, ...]) -> str:
@@ -210,13 +216,18 @@ async def test_effect_runs_updates_and_stops_on_solid(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
-@pytest.mark.parametrize(("first", "second"), [(GREEN, RED), ((0, 255, 0, 40), (255, 0, 0, 255))], ids=["rgb", "rgbw"])
+@pytest.mark.parametrize(
+    ("first", "second", "third"),
+    [(GREEN, RED, BLUE), ((0, 255, 0, 40), (255, 0, 0, 255), (0, 0, 255, 10))],
+    ids=["rgb", "rgbw"],
+)
 async def test_restore_resends_last_state(
     hass: HomeAssistant,
     udp_listener: Listener,
     entry_factory: Callable[..., MockConfigEntry],
     first: tuple[int, ...],
     second: tuple[int, ...],
+    third: tuple[int, ...],
 ) -> None:
     attr = _color_attr(first)
     mock_restore_cache(
@@ -224,13 +235,20 @@ async def test_restore_resends_last_state(
         [
             State(OUT1, STATE_ON, {ATTR_BRIGHTNESS: 100, attr: list(first), ATTR_EFFECT: EFFECT_OFF}),
             State(OUT2, STATE_ON, {ATTR_BRIGHTNESS: 200, attr: list(second), ATTR_EFFECT: "rainbow"}),
+            State(_pixel(1, 3), STATE_ON, {ATTR_BRIGHTNESS: 255, attr: list(third)}),  # over Output 1's color
         ],
     )
-    entry = entry_factory(data_type="rgbw" if len(first) == 4 else "rgb")
+    entry = entry_factory(data_type="rgbw" if len(first) == 4 else "rgb", options={"pixel_lights": True})
     await _setup(hass, entry)
 
+    strip = entry.runtime_data.sender.strip
     packet = await udp_listener.wait_for(lambda p: p.offset == 0)
-    assert packet.data == process_frame(bytes(first) * 80, entry.runtime_data.sender.strip, brightness=100 / 255)
+    assert packet.data == process_frame(bytes(first) * 80, strip, brightness=100 / 255)
+    # The pixel light restores after its output, so its pixel (DDP pixel 2) shows its own color.
+    pixel = await udp_listener.wait_for(lambda p: p.offset == 2 * len(first))
+    assert pixel.data == process_frame(bytes(third), strip)
+    assert udp_listener.packets.index(pixel) > udp_listener.packets.index(packet)
+    assert hass.states.get(_pixel(1, 3)).state == STATE_ON  # type: ignore[union-attr]
     assert entry.runtime_data.runners["output2"].running
     await udp_listener.wait_for(lambda p: p.offset == 80 * len(first))
 
@@ -562,4 +580,139 @@ async def test_concurrent_take_holds_black_for_the_off_outputs(
     await udp_listener.settle()
 
     assert_holds_follow_lights(entry.runtime_data)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_pixel_lights_follow_the_option(
+    hass: HomeAssistant, udp_listener: Listener, entry_factory: Callable[..., MockConfigEntry]
+) -> None:
+    entry = entry_factory(options={"pixel_lights": True})
+    await _setup(hass, entry)
+    registry = er.async_get(hass)
+
+    def pixel_ids() -> list[str]:
+        entries = er.async_entries_for_config_entry(registry, entry.entry_id)
+        return sorted(e.unique_id for e in entries if "_pixel" in e.unique_id)
+
+    # One light per pixel of every output, numbered from 1 along each output, next to the output lights.
+    keys = [f"output{output}_pixel{n}" for output, count in ((1, 80), (2, 42)) for n in range(1, count + 1)]
+    assert pixel_ids() == sorted(f"{entry.entry_id}_{key}" for key in keys)
+    assert registry.async_get_entity_id(LIGHT_DOMAIN, DOMAIN, f"{entry.entry_id}_output2_pixel42") == _pixel(2, 42)
+    state = hass.states.get(_pixel(2, 42))
+    assert state is not None
+    assert (state.state, state.name) == (STATE_OFF, "NDB-Pro Output 2 Light 42")
+    assert state.attributes[ATTR_SUPPORTED_COLOR_MODES] == [ColorMode.RGB]
+    assert ATTR_EFFECT_LIST not in state.attributes  # a pixel has no effects
+    assert hass.states.get(OUT2) is not None and hass.states.get(ALL) is not None
+    await udp_listener.settle()
+    assert udp_listener.packets == []  # setup sends nothing
+
+    # Turned off: the reload drops every pixel light, the output lights stay.
+    hass.config_entries.async_update_entry(entry, options={"pixel_lights": False})
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert pixel_ids() == []
+    assert hass.states.get(_pixel(2, 42)) is None
+    assert hass.states.get(OUT2) is not None
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize(
+    ("rev", "number", "pixel"),
+    [(False, 1, 80), (False, 42, 121), (True, 1, 121), (True, 42, 80)],
+    ids=["first", "last", "reversed-first", "reversed-last"],
+)
+async def test_pixel_light_lights_its_physical_pixel(
+    hass: HomeAssistant,
+    udp_listener: Listener,
+    entry_factory: Callable[..., MockConfigEntry],
+    rev: bool,
+    number: int,
+    pixel: int,
+) -> None:
+    # Light 1 is the first pixel along the installed string: on a port the controller reverses, the last DDP pixel.
+    segments = [SEGMENTS[0], {**SEGMENTS[1], "reversed": True}] if rev else SEGMENTS
+    entry = entry_factory(options=PIXEL_OPTIONS, segments=segments)
+    await _setup(hass, entry)
+
+    await _turn_on(hass, _pixel(2, number), rgb_color=RED, brightness=128)
+
+    packet = await udp_listener.wait_for(lambda p: len(p.data) == 3 and any(p.data))
+    expected = process_frame(bytes(RED), entry.runtime_data.sender.strip, brightness=128 / 255)
+    assert (packet.offset, packet.data) == (pixel * 3, expected)
+    state = hass.states.get(_pixel(2, number))
+    assert state is not None
+    assert (state.state, state.attributes[ATTR_RGB_COLOR], state.attributes[ATTR_BRIGHTNESS]) == (STATE_ON, RED, 128)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize(
+    ("look", "output_after"),
+    [({"rgb_color": BLUE}, STATE_ON), ({"effect": "chase"}, STATE_OFF)],
+    ids=["solid-output-stays-on", "effect-output-hands-over"],
+)
+async def test_a_pixel_light_and_its_output_share_the_pixel(
+    hass: HomeAssistant,
+    udp_listener: Listener,
+    entry_factory: Callable[..., MockConfigEntry],
+    look: dict[str, Any],
+    output_after: str,
+) -> None:
+    entry = entry_factory(options=PIXEL_OPTIONS)
+    await _setup(hass, entry)
+    runtime, pixel = entry.runtime_data, _pixel(2, 1)  # DDP pixel 80, Output 2's first
+    strip = runtime.sender.strip
+    red = (OUT2_OFFSET, process_frame(bytes(RED), strip))
+
+    def states() -> list[str]:
+        return [hass.states.get(e).state for e in (OUT2, pixel, ALL)]  # type: ignore[union-attr]
+
+    await _turn_on(hass, OUT2, **look)
+    await udp_listener.settle()
+    udp_listener.packets.clear()
+
+    # Last write wins per pixel: only that pixel's bytes change. A solid output keeps lighting its other pixels and
+    # stays on; an effect would repaint the pixel, so its runner stops and the output shows off (sending nothing).
+    await _turn_on(hass, pixel, rgb_color=RED)
+    await udp_listener.settle()
+    sent = [(p.offset, p.data) for p in udp_listener.packets]
+    assert sent[-1] == red
+    if output_after == STATE_ON:
+        assert sent == [red]
+    assert "output2" not in runtime.runners
+    assert states() == [output_after, STATE_ON, STATE_OFF]
+    assert_holds_follow_lights(runtime)
+
+    # The output repaints its pixels: the pixel light shows off without sending.
+    udp_listener.packets.clear()
+    await _turn_on(hass, OUT2, rgb_color=GREEN, effect=EFFECT_OFF)
+    await udp_listener.settle()
+    assert [(p.offset, p.data) for p in udp_listener.packets] == [
+        (OUT2_OFFSET, process_frame(bytes(GREEN) * 42, strip))
+    ]
+    assert states() == [STATE_ON, STATE_OFF, STATE_OFF]
+
+    # Turning the output off blanks its pixels, so a pixel light on over it goes off too.
+    await _turn_on(hass, pixel, rgb_color=RED)
+    assert states() == [STATE_ON, STATE_ON, STATE_OFF]
+    await udp_listener.settle()
+    udp_listener.packets.clear()
+    await _turn_off(hass, OUT2)
+    await udp_listener.settle()
+    assert [(p.offset, p.data) for p in udp_listener.packets] == [(OUT2_OFFSET, bytes(42 * 3))]
+    assert states() == [STATE_OFF, STATE_OFF, STATE_OFF]
+    assert_holds_follow_lights(runtime)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_set_pattern_is_refused_on_a_pixel_light(
+    hass: HomeAssistant, udp_listener: Listener, entry_factory: Callable[..., MockConfigEntry]
+) -> None:
+    entry = entry_factory(options=PIXEL_OPTIONS)
+    await _setup(hass, entry)
+    with pytest.raises(ServiceValidationError) as raised:
+        await _set_pattern(hass, _pixel(1, 1), colors=[[1, 2, 3]])
+    assert raised.value.translation_key == "pixel_light_pattern"
+    await udp_listener.settle()
+    assert udp_listener.packets == []
     assert await hass.config_entries.async_unload(entry.entry_id)
