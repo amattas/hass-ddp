@@ -23,6 +23,9 @@ SEGMENT_KEY: Final = "key"
 SEGMENT_NAME: Final = "name"
 SEGMENT_START: Final = "start"
 SEGMENT_LENGTH: Final = "length"
+# The controller reverses this output, so its pixel lights count from its last pixel. The flow always stores it;
+# entries from before it have none (read as false; a reconfigure from the layout fills it).
+SEGMENT_REVERSED: Final = "reversed"
 
 DATA_TYPE_RGB: Final = "rgb"
 DATA_TYPE_RGBW: Final = "rgbw"
@@ -33,6 +36,7 @@ CONF_BRIGHTNESS_CAP: Final = "brightness_cap"  # percent
 CONF_COLOR_ORDER: Final = "color_order"
 CONF_FPS: Final = "fps"
 CONF_KEEPALIVE: Final = "keepalive"  # seconds, 0 = off
+CONF_PIXEL_LIGHTS: Final = "pixel_lights"  # one light per pixel of every output, next to the output lights
 
 DEFAULT_BRIGHTNESS_CAP: Final = 60
 DEFAULT_FPS: Final = 30
@@ -40,6 +44,7 @@ DEFAULT_FPS: Final = 30
 DEFAULT_KEEPALIVE: Final = 1.0
 MIN_KEEPALIVE: Final = 0.5
 MAX_KEEPALIVE: Final = 300.0
+DEFAULT_PIXEL_LIGHTS: Final = False  # opt-in: a 122-pixel strip would add 122 entities
 
 COLOR_ORDERS: Final = {
     DATA_TYPE_RGB: ["".join(p) for p in permutations("RGB")],
@@ -52,18 +57,19 @@ SOLID_EFFECT: Final = "solid"
 
 
 class LightSource(StrEnum):
-    """What lights a DDP light's pixels: nothing, HA over DDP, the controller's running scene, or HA's held black
-    over a running scene (the light was turned off while the scene runs). The light is on for ``ddp`` and ``scene``.
+    """What lights a DDP light's pixels: nothing, or HA over DDP (the light is on). A controller scene never shares
+    the pixels with DDP: scene mode and DDP mode are exclusive, and in scene mode every DDP light is off. Stored in
+    restore data; an earlier version's ``scene`` and ``blanked`` read as not driven by DDP.
     """
 
     OFF = "off"
     DDP = "ddp"
-    SCENE = "scene"
-    BLANKED = "blanked"
 
 
 # Unique-ID suffix of the "All outputs" light, which spans the whole strip (entries with more than one segment).
 STRIP_KEY: Final = "strip"
+# Unique-ID suffix of a pixel light after its output's key, with the pixel's 1-based physical number: output2_pixel1.
+PIXEL_KEY: Final = "pixel"
 
 # Actions
 SERVICE_RECALL_PRESET: Final = "recall_preset"

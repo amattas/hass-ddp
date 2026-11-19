@@ -23,13 +23,15 @@ one registry entry). See `DECISIONS.md`.
   `Strip`, one open `DDPSender`, segments, fps, runners, `sync_holds()` (the byte ranges keepalive resends follow the
   DDP lights' state, read from `DDPSender.held`), the `Controller` built from the entry's stored `controller_type`
   (`None` for Generic), its `DDPScenesCoordinator` and `ControllerCommands`; `async_migrate_entry` (1 -> 2).
-  `PLATFORMS` = light, number, select, switch
+  `PLATFORMS` = light, select
 - `commands.py`: `ControllerCommands`, the controller commands shared by the controller device's entities (turn on
-  with an effect, turn off = the controller's Off plus blanking the DDP-driven segments, recall a preset, set the
-  intensity, the palette or one slot). A command that
-  starts a scene hands the pixels back from DDP once the controller took it; `follow_poll` (the coordinator's
-  `on_poll` hook) does the same for changes made outside HA. Everything runs under the coordinator lock and publishes
-  the result
+  with an effect, turn off = the controller's Off, recall a preset, set the intensity, the palette or one slot). Scene
+  mode and DDP mode are exclusive (DECISIONS.md 2026-11-19): a command that starts a scene turns every DDP light off
+  once the controller took it (`_hand_back`, nothing sent, nothing held); `follow_poll` (the coordinator's `on_poll`
+  hook) does the same for a scene started outside HA; `leave_scene` turns the controller Off before a DDP light
+  drives pixels (best effort when the mode is unknown). `runtime.scene_mode` (True/False/None) is the DDP lights' model
+  of the controller, set by setup, polls and commands (scene mode is entered only under `ownership`) (a taken scene command counts even if its
+  read-back fails). Everything runs under the coordinator lock and publishes the result
 - `coordinator.py`: `DDPScenesCoordinator` (30 s poll of the controller state and palette); `lock` serializes polls and
   commands, so a stale poll cannot undo a command; `on_poll`; `last_effect`. `diagnostics.py`: redacted entry, sender,
   and controller documents
@@ -41,15 +43,21 @@ one registry entry). See `DECISIONS.md`.
 - `config_flow.py`: host -> `aioddp.discover` + `detect` -> controller type step (detected preselected, Generic always
   offered) -> for every type the manual steps (prefilled from the detected layout if any, keeping its title and
   device info): pixel type + number of outputs, then one `output` step per output (name, 1-based first/last pixel;
-  gaps allowed, overlaps refused; pixel count = highest last pixel; a prefilled output keeps its segment key);
+  gaps allowed, overlaps refused; pixel count = highest last pixel; a prefilled output keeps its segment key; a
+  "Reversed" box, always stored, prefilled from the layout's `rev`; a layout reconfigure keeps a stored flag per key);
   reconfigure changes host/type, re-reads the layout for a vendor type, and walks the same manual/output steps,
   prefilled from the read layout (stored names kept per key, its device info stored) or else the stored segments;
-  options flow (cap, color order, fps, keepalive)
+  options flow (cap, color order, fps, keepalive, `pixel_lights`)
 - `light.py`: `DDPSegmentLight` (`LightEntity` + `RestoreEntity`), RGB or RGBW color mode from the entry's data type,
-  aioddp effects, `ddp.set_pattern` (kept in restore state); a `source` of `off`/`ddp`/`scene`/`blanked` (see
-  DECISIONS.md 2026-11-06); `AllOutputsLight` over the whole strip when there is more than one segment (DDP lights
+  aioddp effects, `ddp.set_pattern` (kept in restore state); a `source` of `off`/`ddp`; every change runs under
+  `_drive`: in DDP mode (`runtime.scene_mode` False) only `ownership`, never waiting on the controller; otherwise the
+  coordinator lock, `leave_scene`, then `ownership`; restore sends nothing in scene mode and syncs the holds; `AllOutputsLight` over the whole strip when there is more than one segment (DDP lights
   that share pixels hand them to each other without sending); `PaletteLight` "Color 1".."Color 5", one palette slot
-  each: RGB, or color temperature (2700 K warm, 6500 K cool) while it holds a white. Setup removes any light of the entry it did not create
+  each: RGB, or color temperature (2700 K warm, 6500 K cool) while it holds a white. `PixelLight` (option
+  `pixel_lights`): one per pixel of every output, "<output> Light N" in physical order (a `reversed` output counts
+  from its last DDP pixel), unique ID `<segment key>_pixel<N>`, no effects or patterns; it never turns its output off (freezes an effect)
+  (DECISIONS.md 2026-11-18). Overlap lists are computed once at setup (`link`). Setup removes any light of the entry
+  it did not create
 - `light.py` also has `ControllerLight`, the controller device's main entity (no name; brightness = intensity): on = a scene runs, off = the controller's
   Off; `colors`/`background` attributes, `last_effect` restore, `ddp.recall_preset`, `ddp.set_colors`.
   `select.py`: `SceneSelect` (the controller's effects without Off).

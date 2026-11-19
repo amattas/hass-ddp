@@ -24,11 +24,12 @@ for which controllers have been exercised.
 
 | Entity | What it does |
 |---|---|
-| **Output N** light (one per output; a manually defined output has the name you gave it) | On/off, brightness, RGB color (RGBW color for an RGBW entry), the aioddp effects, and multi-color patterns (`ddp.set_pattern`). Sends DDP; its state is assumed. While a controller scene runs it shows on (the scene), and turning it off disables just that output |
+| **Output N** light (one per output; a manually defined output has the name you gave it) | On/off, brightness, RGB color (RGBW color for an RGBW entry), the aioddp effects, and multi-color patterns (`ddp.set_pattern`). Sends DDP; its state is assumed. On a vendor controller, turning it on stops a running scene (the controller goes `Off`), and starting a scene turns it off |
 | **All outputs** light (only when the controller has more than one output) | The same as an output light, over the whole strip: a pattern or effect runs on across the outputs in one DDP frame |
-| **Controller** light (vendor controller types only; the controller device's main entity, named like the device) | On while the controller runs a scene. On brings back the last scene (else the first), also after a restart; brightness is the controller's own intensity (1-100%), and turn_on with a brightness sets it. Off is the controller's `Off` and blanks the DDP lights too. Its `colors` and `background` attributes are the controller's palette (the colors its effects use), set with `ddp.set_colors`; `ddp.recall_preset` plays a stored preset. Polled |
+| **Output N Light 1** to **Light N** (with the **One light per pixel** option; one per pixel of every output) | One pixel each: on/off, brightness, and color (RGBW for an RGBW entry); no effects or patterns. Numbered along the installed string: Light 1 is the output's first pixel, or its last one on an output marked **Reversed**. Shares its pixel with its output light and All outputs (see below) |
+| **Controller** light (vendor controller types only; the controller device's main entity, named like the device) | On while the controller runs a scene. On brings back the last scene (else the first), also after a restart; brightness is the controller's own intensity (1-100%), and turn_on with a brightness sets it. Off is the controller's `Off`; starting a scene turns the DDP lights off. Its `colors` and `background` attributes are the controller's palette (the colors its effects use), set with `ddp.set_colors`; `ddp.recall_preset` plays a stored preset. Polled |
 | **Color 1** to **Color 5** lights (controller device) | One palette slot each; off empties the slot. A Color tab for a custom color (brightness shows 255 and scales the color a turn_on sends) and a Temperature tab from 2700 K (the controller's Warm White) to 6500 K (its Cool White), in between a white mixed from RGB |
-| **Scene** select (controller device) | The controller's built-in effects and shows; the running one is selected, none while it is `Off`. Selecting one runs it and hands the pixels back from DDP |
+| **Scene** select (controller device) | The controller's built-in effects and shows; the running one is selected, none while it is `Off`. Selecting one runs it and turns the DDP lights off |
 
 **RGBW.** When the entry's pixel type is RGBW (the controller reports 4-channel input, or you chose RGBW when
 describing the strip), every DDP light uses Home Assistant's RGBW color mode: `rgbw_color` sets red, green, blue,
@@ -36,12 +37,12 @@ and white, and white reaches the pixels' white LEDs. The default look is the whi
 Solid colors and `palette` patterns carry white; the animated effects use red, green, and blue only (see Known
 limitations).
 
-Devices: the output lights and All outputs are on the DDP device, named after the entry. A vendor controller type adds
+Devices: the output lights, All outputs and the pixel lights are on the DDP device, named after the entry. A vendor controller type adds
 a controller device named after the entry and the type (for example "Front Yard Minleon NDB-Pro"), connected through
 the DDP device, with the main light, Color 1 to 5, and Scene on it; the DDP device is then named after
 the entry and Generic DDP ("Front Yard Generic DDP").
 
-Actions: `ddp.set_pattern` (DDP lights: the outputs and All outputs), and `ddp.recall_preset` and `ddp.set_colors`
+Actions: `ddp.set_pattern` (DDP lights: the outputs and All outputs, not the pixel lights), and `ddp.recall_preset` and `ddp.set_colors`
 (the NDB-Pro controller light only). Home Assistant's `light.turn_on` and `light.turn_off` work on every light, and scenes capture the segment lights.
 The integration provides no triggers or conditions.
 
@@ -49,6 +50,13 @@ The integration provides no triggers or conditions.
 stops the output lights' effects and shows them off, without sending anything; turning an output light on does the same
 to All outputs. Nothing is blanked: the newly turned-on light simply draws over its own pixels, and an output that All
 outputs had lit keeps that frame until something else sends to it.
+
+**Pixel lights share their pixel** with their output light and All outputs, and the last write wins per pixel.
+Coloring a pixel light changes only that pixel, and its output (and All outputs) stays on, lighting its other pixels:
+a solid color stays, and an effect or pattern stops on its last frame (it would paint over the pixel), shown with
+effect off. Turning the output light on again, or giving it a color or an effect,
+repaints all its pixels, and the pixel lights on it show off. Turning the output light off blanks all its pixels, so
+its pixel lights go off too. Turning a pixel light off sends black for that pixel only.
 
 ## Installation
 
@@ -90,6 +98,7 @@ pinned git commits (`aioddp` is not yet published to PyPI).
 | Pixel type | Add, Reconfigure | RGB (3 channels per pixel) or RGBW (4) |
 | Number of outputs | Add, Reconfigure | 1 to 16; one light each, not the pixel count |
 | Name, First pixel, Last pixel | Add, Reconfigure (once per output) | 1-based, inclusive; gaps allowed, overlaps refused |
+| Reversed | Add, Reconfigure (once per output) | The controller reverses this output, so its pixel lights count from the other end (Light 1 is the range's last pixel). Changes nothing DDP sends. Prefilled from the controller's layout (the NDB-Pro's per-port reverse setting); a reconfigure keeps what you stored. Set it by hand on a Generic DDP controller |
 
 DDP is send-only UDP with no acknowledgement, so setup can only check that a socket opens. Setup never sends a frame,
 and reloading or removing the integration never blanks the lights.
@@ -99,7 +108,7 @@ and reloading or removing the integration never blanks the lights.
 | Type | Lights |
 |---|---|
 | Generic DDP | One DDP light per output. Works with any DDP controller; nothing else is created |
-| Minleon NDB-Pro | The DDP lights, plus a controller device with the **controller light** (its main entity), **Color 1** to **Color 5**, and **Scene**, and the `ddp.recall_preset` and `ddp.set_colors` actions (see below) |
+| Minleon NDB-Pro | The DDP lights, plus a controller device with the **controller light** (its main entity), **Color 1** to **Color 5**, and **Scene**, and the `ddp.recall_preset` and `ddp.set_colors` actions (see below). The controller's scenes and the DDP lights are exclusive: starting a scene turns the DDP lights off, turning a DDP light on turns the controller `Off` |
 
 The stored type decides: nothing probes the controller at startup. Adding another vendor's controller means one entry
 in the controller type registry (`custom_components/ddp/controller.py`) backed by that vendor's library.
@@ -110,7 +119,7 @@ in the controller type registry (`custom_components/ddp/controller.py`) backed b
 and re-reads the output layout the same way adding does (a DDP query, then the controller type's own API). The form
 shows the stored pixel type and the layout the controller reports now. Submitting always continues to the same pixel
 type, outputs, and per-output steps as adding. When the controller reports a layout they are prefilled from it (its
-pixel type, outputs and ranges, keeping the names you gave the outputs), and its device info is stored; so after
+pixel type, outputs and ranges, keeping the names and Reversed flags you gave the outputs), and its device info is stored; so after
 switching an NDB-Pro between a 3-channel and a 4-channel input mode, reconfigure the entry to follow it. For
 **Generic DDP**, or when the controller reports no layout, they are prefilled with the stored outputs. Change the
 ranges, add or remove outputs: outputs that are still there keep their lights; an output that is gone loses its light
@@ -128,6 +137,7 @@ its entities.
 | Color order | RGB / RGBW | Channel order the pixels expect |
 | Effect frame rate | 30 fps | 1 to 60 |
 | Keepalive interval | 1 s | Re-sends the current frame so the controller doesn't fall back to its built-in effect; 0 turns it off, otherwise at least 0.5 s |
+| One light per pixel | Off | Adds a light for every pixel of every output ("Output 1 Light 1", ...), to turn single pixels on and off and color them. A 122-pixel controller gets 122 more lights; turning it off removes them |
 
 Saving options reloads the entry.
 
@@ -182,7 +192,7 @@ keep their entity IDs (for example `light.ndbpro_minleon_ndb_pro` and `light.ndb
 
 - Scene's options are the controller's effects: `Show1` and `Show2` play the shows stored on the controller; the rest
   (`Test`, `Bands`, `Glow`, ...) are its built-in patterns. The controller light's brightness sets the controller's intensity (1-100%).
-- Turning the controller light off selects the controller's `Off` and also blanks any segment light that is on, so the house goes dark.
+- Turning the controller light off selects the controller's `Off`. A scene and the DDP lights never run together: starting a scene turns the DDP lights off, and turning a DDP light on turns the controller `Off`.
 - Turning the controller light on brings back the last scene, also after a Home Assistant restart. Startup never commands the controller; the
   controller device polls the controller every 30 s and shows what it is actually running.
 - `ddp.recall_preset` (on the controller light) plays one of the 20 stored presets (1-10 are slots of Show 1, 11-20 of Show 2).
@@ -209,34 +219,25 @@ Presets are Home Assistant scenes: a scene that captures the controller light, S
 DDP lights restores the whole look (a Color N light sets its slot outright, so the order the scene applies them in does not matter). The NDB-Pro's 20 stored presets are recall-only, with
 `ddp.recall_preset`; the integration never writes the controller's saved settings.
 
-**Segment lights vs. scenes.** DDP data overrides the controller's built-in effect immediately, and about 20 s after DDP
-stops on its pixels the controller falls back to it. Each DDP light (the outputs and All outputs) shows what lights its
-pixels:
+**Segment lights vs. scenes: two exclusive modes.** The controller cannot report the pixels of its own scenes (it
+answers no DDP query and its web UI has no pixel readback), so DDP pixels over a running scene could never be shown
+truthfully. A vendor controller is therefore either in **scene mode** (it runs a scene, every DDP light is off) or in
+**DDP mode** (the controller is `Off`, the DDP lights drive the pixels):
 
-- Turning on a scene (the controller light or Scene, or recalling a preset) stops DDP without sending black and shows every DDP light on: they show
-  the scene. A scene started from the controller's own UI does the same once the 30 s poll sees it.
-- Turning a DDP light off while a scene runs disables that output: black is sent for its pixels only and kept up by the
-  keepalive, and the scene keeps running on the other outputs. All outputs off blanks the whole strip and shows every
-  output off.
-- A bare `light.turn_on` (no brightness, color, or effect) of a disabled light hands its pixels back to the scene:
-  nothing is sent and the keepalive stops for them, and the controller resumes the scene there after its DDP timeout,
-  about 20 s later. A bare turn_on of All outputs brings back every output; brought back one at a time, All outputs
-  shows on again once no output is disabled.
-- Turning a DDP light on with a brightness, color, effect, or pattern takes its pixels over DDP again; a light that
-  shares those pixels (All outputs for an output, the outputs for All outputs) shows off, and the others keep showing
-  the scene. While a light holds pixels, the keepalive (default 1 s) keeps re-sending them so the
-  controller does not fall back mid-color; with keepalive 0 a solid color reverts to the built-in effect after about
-  20 s.
-- Turning the controller light off turns every DDP light off. When the poll sees the controller turned `Off` elsewhere,
-  the lights that showed or disabled the scene go off; lights driven over DDP keep running.
-- With no scene running, an off output stays black (held by the keepalive) while another DDP light is on; when the
-  last DDP light turns off, DDP stops; about 20 s later the controller's own effect
-  (or `Off`) is back.
-- After a Home Assistant restart a disabled output is not restored (no black is sent, so the scene comes back on it),
-  and a light that showed the scene is not re-sent; with a scene running, the idle DDP lights show it again.
-
-Not verified on hardware yet: whether the NDB-Pro keeps its effect running on outputs DDP is not writing to. If it does
-not, disabling one output freezes the scene on the others.
+- Turning on a scene (the controller light or Scene, or recalling a preset) turns every DDP light off (outputs, All
+  outputs, pixel lights) without sending black: effects stop and the keepalive stops re-sending, so the controller's
+  scene shows. A scene started from the controller's own UI or app does the same once the 30 s poll sees it.
+- Turning on any DDP light, or `ddp.set_pattern`, while a scene runs first turns the controller `Off`, then drives the
+  pixels. If the controller does not answer, the action fails and nothing is sent. If the controller has not been
+  read since startup (its web UI was down), turning it `Off` is tried but not required: DDP goes ahead, and the first
+  good poll turns the DDP lights off if a scene runs.
+- In DDP mode the DDP lights work as on a Generic DDP controller: an off output stays black (held by the keepalive)
+  while another DDP light is on; when the last one turns off, DDP stops and about 20 s later the controller shows its
+  own `Off`. Turning the controller light off selects `Off` and leaves DDP mode alone.
+- Palette changes (Color 1 to 5, `ddp.set_colors`) change no mode.
+- After a Home Assistant restart the DDP lights restore and re-send their last look only if the controller is not
+  running a scene (setup reads its state and never commands it; if it cannot be read, they are re-sent and the first
+  good poll turns them off if a scene runs). The off DDP lights next to a restored one are held black.
 
 ## Examples: scenes on a schedule
 
@@ -285,7 +286,7 @@ automation:
           entity_id: light.ndbpro_minleon_ndb_pro
 ```
 
-Turning the controller light off blanks the DDP segment lights too, so the 23:00 automation is all you need for "off".
+Starting the scene at sunset turns the DDP lights off, so the 23:00 automation is all you need for "off" (if a DDP light was turned on in between, the controller is already `Off`; turn that light off instead).
 
 Home Assistant scenes still work for the DDP segment lights; a scene captures each light's state (on/off, brightness,
 color, effect):
@@ -377,7 +378,8 @@ Red, white, and blue blocks of five pixels on one output, then a moving version 
   scenes.
 - Let the NDB-Pro play the shows stored on it on a schedule (sunset to 23:00) while Home Assistant stays in charge of
   the on/off times.
-- Take a section of the strip over for a one-off alert color (for example a doorbell flash) and hand it back after.
+- Flash an alert color (for example a doorbell) over DDP, then start the stored scene again: turning a DDP light on
+  stops the controller's scene.
 
 ## Actions
 
@@ -411,8 +413,14 @@ Wi-Fi name are redacted.
   the controller's saved settings.
 - **Segment light state is assumed.** Changes made elsewhere (another sender) are not seen; the controller's own scene
   starting or stopping is, at the next 30 s poll.
-- **Per-output disable during a scene is not verified on hardware.** If the NDB-Pro stops its effect on every output
-  while DDP writes to one, disabling one output freezes the scene on the others.
+- **Pixel light numbering on a reversed port is not verified on hardware.** On an output marked Reversed, Light 1 is
+  the output's last DDP pixel, assuming the controller's reverse puts that pixel at the start of the string. If Light 1
+  lights the far end, untick **Reversed** for that output (Reconfigure); the lights keep their entity IDs, and later
+  reconfigures keep your choice (only an entry from before the flag takes it from the controller's layout).
+- **No DDP pixels over a running scene.** The controller cannot report its scenes' pixels, so a scene and the DDP
+  lights are exclusive: turning a DDP light on stops the scene, starting a scene turns the DDP lights off.
+- **After a scene starts, the last DDP frame may linger.** HA stops sending at once; the NDB-Pro shows its scene again
+  when it notices DDP stopped, which may take up to its DDP timeout (about 20 s). Not measured on hardware yet.
 - **Setup cannot verify the controller over DDP.** It only checks that a UDP socket opens; a wrong host looks fine
   until a frame is sent and nothing lights up.
 - **The controller device needs the controller's HTTP UI on port 80** and only exists for vendor controller types.
@@ -433,7 +441,7 @@ Wi-Fi name are redacted.
 | Lights do not react | Host is right; UDP 4048 is not blocked between Home Assistant and the controller; nothing else is sending DDP to it; the output is patched on the controller. The brightness cap (default 60%) may also make colors dimmer than expected |
 | Colors are wrong (red and green swapped, ...) | Set **Color order** in the options to match the pixels |
 | A solid color turns into the controller's own effect after about 20 s | The keepalive is off or too long; set it to 1 s |
-| The controller light, Color 1-5, or Scene are unavailable | The controller's web UI (TCP 80) is not answering. The DDP lights are unaffected; the controller device's entities recover on the next 30 s poll |
+| The controller light, Color 1-5, or Scene are unavailable | The controller's web UI (TCP 80) is not answering; the controller device's entities recover on the next 30 s poll. In DDP mode the DDP lights are unaffected. Turning a DDP light on while a scene runs needs the controller to answer (it is turned `Off` first), else the action fails; if the controller was never read since startup, DDP goes ahead and the first good poll turns the DDP lights off if a scene runs |
 | Color N shows a temperature, not a color | The slot holds one of the controller's whites (Warm White or Cool White). Pick a color on its Color tab; the Temperature tab is the white picker |
 | The controller has a new IP address | **Reconfigure** the entry and enter the new host (give the controller a DHCP reservation to avoid this) |
 | `ddp.recall_preset` or `ddp.set_colors` does nothing or is refused | Nothing happens (and the log warns about the target) when the target is not the controller light, for example a light or a Generic DDP entry, which has none. `ddp.set_colors` refuses more than 5 colors, a component outside 0-255, or a name other than `cool_white` / `warm_white` |

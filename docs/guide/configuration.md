@@ -5,7 +5,7 @@
 | Type | Lights |
 |---|---|
 | Generic DDP | One DDP light per output. Works with any DDP controller; nothing else is created |
-| Minleon NDB-Pro | The DDP lights, plus a controller device with the **controller light** (its main entity), **Color 1** to **Color 5**, and **Scene**, and the `ddp.recall_preset` and `ddp.set_colors` actions (see [NDB-Pro built-in scenes](entities.md#ndb-pro-built-in-scenes)) |
+| Minleon NDB-Pro | The DDP lights, plus a controller device with the **controller light** (its main entity), **Color 1** to **Color 5**, and **Scene**, and the `ddp.recall_preset` and `ddp.set_colors` actions (see [NDB-Pro built-in scenes](entities.md#ndb-pro-built-in-scenes)). The controller's scenes and the DDP lights are exclusive: starting a scene turns the DDP lights off, turning a DDP light on turns the controller `Off` |
 
 The stored type decides: nothing probes the controller at startup. Adding another vendor's controller means one entry
 in the controller type registry (`custom_components/ddp/controller.py`) backed by that vendor's library.
@@ -25,6 +25,7 @@ reports it from its input mode, so it must be set to a 4-channel mode in its own
 | Color order | RGB / RGBW | Channel order the pixels expect |
 | Effect frame rate | 30 fps | 1 to 60 |
 | Keepalive interval | 1 s | Re-sends the current frame so the controller doesn't fall back to its built-in effect; 0 turns it off, otherwise at least 0.5 s |
+| One light per pixel | Off | Adds a light for every pixel of every output ("Output 1 Light 1", ...), to turn single pixels on and off and color them (see [Lights](entities.md#lights)). A 122-pixel controller gets 122 more lights; turning it off removes them |
 
 Saving options reloads the entry.
 

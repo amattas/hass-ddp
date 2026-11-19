@@ -9,6 +9,9 @@
       },
       "controller": {
         "default": "mdi:palette"
+      },
+      "pixel": {
+        "default": "mdi:led-on"
       }
     },
     "select": {
