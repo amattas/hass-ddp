@@ -338,6 +338,9 @@ Superseded by 2026-11-19 (scene mode and DDP mode are exclusive).
   exists, or that the registry restores (HA keeps a removed device's name and area, so 2 -> 1 -> 2 outputs brings
   back the user's settings; a re-added entry's orphans too), is never changed: what the user sets on an output
   device later is theirs. Lights with their own area or name are untouched.
+  The copy happens only at creation: later changes to the DDP device's area or name are not followed, and a
+  `name_by_user` written this way hides later output renames (HA treats it as the user's; verifier found it, left as
+  documented: the user renames the device by hand).
 - Stale devices: light setup removes every device of the entry it no longer wants (output devices of dropped
   outputs, all of them once a single output is left, the controller device after a switch to Generic DDP). A light
   setup still creates is detached from the device first (`device_id=None`), so the device's removal does not take
