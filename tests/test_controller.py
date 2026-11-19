@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 import probatio
 import pytest
+from aioddp import process_frame
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
     ATTR_COLOR_MODE,
@@ -673,6 +674,8 @@ async def test_held_pixels_follow_the_light_states(
         assert_holds_follow_lights(runtime, step)
         assert not (runtime.scene_running and runtime.ddp_driving), step
         assert (_state(hass, MAIN).state == STATE_ON) == runtime.scene_running, step
+        running = fake_controller.selected() not in (None, "Off")  # what the controller itself runs
+        assert running == runtime.scene_running, (step, fake_controller.selected())
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -683,9 +686,14 @@ async def _poll_after(fake_controller: FakeController, entry: MockConfigEntry, e
 
 
 @pytest.mark.parametrize(
-    ("effect", "source", "sent"),
-    [("Glow", "ddp", False), ("Off", "ddp", True), ("Off", "scene", False)],
-    ids=["scene-running", "controller-off", "stored-scene-source"],
+    ("effect", "light", "source", "sent"),
+    [
+        ("Glow", OUT1, "ddp", False),
+        ("Off", OUT1, "ddp", True),
+        ("Off", PIXEL, "ddp", True),
+        ("Off", OUT1, "scene", False),
+    ],
+    ids=["scene-running", "controller-off", "pixel-light-only", "stored-scene-source"],
 )
 async def test_restart_follows_the_controller_mode(
     hass: HomeAssistant,
@@ -693,23 +701,80 @@ async def test_restart_follows_the_controller_mode(
     fake_controller: FakeController,
     entry_factory: Callable[..., MockConfigEntry],
     effect: str,
+    light: str,
     source: str,
     sent: bool,
 ) -> None:
-    # Output 1 was on (red over DDP, or, stored by an earlier version, showing the scene); Output 2 was blanked by an
-    # earlier version. Setup only reads the controller: a running scene keeps every DDP light off and unsent.
+    # One light was on (red over DDP, or, stored by an earlier version, showing the scene); Output 2 was blanked by
+    # an earlier version. Setup only reads the controller: a running scene keeps every DDP light off and unsent.
     on = {ATTR_BRIGHTNESS: 255, ATTR_RGB_COLOR: [255, 0, 0], ATTR_EFFECT: "off"}
     mock_restore_cache_with_extra_data(
-        hass, [(State(OUT1, STATE_ON, on), {"source": source}), (State(OUT2, STATE_OFF), {"source": "blanked"})]
+        hass, [(State(light, STATE_ON, on), {"source": source}), (State(OUT2, STATE_OFF), {"source": "blanked"})]
     )
     fake_controller.select(effect)
-    entry = entry_factory(controller=fake_controller)
+    entry = entry_factory(controller=fake_controller, options={"pixel_lights": True})
     await _setup(hass, entry)
     await udp_listener.settle()
 
-    assert [p.offset for p in udp_listener.packets] == ([0] if sent else [])
+    red = process_frame(bytes((255, 0, 0)), entry.runtime_data.sender.strip)
+    offset = OUT2_OFFSET if light == PIXEL else 0
+    assert any(p.offset == offset and p.data[:3] == red for p in udp_listener.packets) == sent
+    assert all(not any(p.data) or p.offset == offset for p in udp_listener.packets)  # else only black
     assert fake_controller.commands() == []
-    assert [_state(hass, e).state for e in DDP_LIGHTS] == [STATE_ON if sent else STATE_OFF, STATE_OFF, STATE_OFF]
+    assert [_state(hass, e).state for e in [*DDP_LIGHTS, PIXEL]] == [
+        STATE_ON if sent and e == light else STATE_OFF for e in [*DDP_LIGHTS, PIXEL]
+    ]
+    # The restored light's pixels are held, and the off lights' black next to them.
+    assert_holds_follow_lights(entry.runtime_data, "restart")
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize("reachable", [True, False], ids=["controller-answers", "controller-down"])
+async def test_a_ddp_light_turned_on_while_the_controller_state_is_unknown(
+    hass: HomeAssistant,
+    udp_listener: Listener,
+    fake_controller: FakeController,
+    entry_factory: Callable[..., MockConfigEntry],
+    reachable: bool,
+) -> None:
+    fake_controller.offline = True  # its page says Glow runs, but setup cannot read it
+    entry = entry_factory(controller=fake_controller)
+    await _setup(hass, entry)
+    fake_controller.offline = not reachable
+
+    # Best effort: the controller is told Off if it answers; DDP drives the pixels either way, without an error.
+    await _call(hass, SERVICE_TURN_ON, OUT1, rgb_color=(255, 0, 0))
+    await udp_listener.wait_for(lambda p: p.offset == 0 and any(p.data))
+    assert fake_controller.commands() == ([_control('{"fx":"Off"}')] if reachable else [])
+    assert _state(hass, OUT1).state == STATE_ON
+
+    # The first good poll decides: still a scene (it never took the Off) turns the DDP lights off.
+    fake_controller.offline = False
+    await _poll(entry)
+    assert _state(hass, OUT1).state == (STATE_ON if reachable else STATE_OFF)
+    assert_holds_follow_lights(entry.runtime_data)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def test_a_ddp_light_does_not_wait_for_a_poll(
+    hass: HomeAssistant,
+    udp_listener: Listener,
+    fake_controller: FakeController,
+    entry_factory: Callable[..., MockConfigEntry],
+) -> None:
+    fake_controller.select("Off")
+    entry = entry_factory(controller=fake_controller)
+    await _setup(hass, entry)  # DDP mode
+    fake_controller.page_delay = 2.0
+    poll = hass.async_create_task(_poll(entry))
+    await asyncio.sleep(0.05)  # the poll holds the coordinator lock, waiting for its page
+
+    async with asyncio.timeout(0.5):  # well under the page delay: no controller I/O when no scene is known to run
+        await _call(hass, SERVICE_TURN_ON, OUT1, rgb_color=(255, 0, 0))
+    assert not poll.done()
+    await poll
+    assert _state(hass, OUT1).state == STATE_ON
+    assert fake_controller.commands() == []
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -854,12 +919,19 @@ async def test_errors(
 
 
 async def test_recall_preset_read_back_failure_marks_the_controller_unavailable(
-    hass: HomeAssistant, ndb_entry: MockConfigEntry
+    hass: HomeAssistant, udp_listener: Listener, fake_controller: FakeController, ndb_entry: MockConfigEntry
 ) -> None:
+    await _call(hass, SERVICE_TURN_ON, OUT1, rgb_color=(255, 0, 0))  # DDP mode: the controller is Off
     # The preset was recalled; only the read that follows fails. The action succeeds and Power says it is unsure.
     with patch.object(ndb_entry.runtime_data.controller, "state", side_effect=ControllerError("gone")):
         await _recall_preset(hass)
     assert _state(hass, MAIN).state == STATE_UNAVAILABLE
+    assert _state(hass, OUT1).state == STATE_OFF
+    # The controller took the preset, so a scene runs: a DDP light turned on now turns the controller off first.
+    fake_controller.requests.clear()
+    await _call(hass, SERVICE_TURN_ON, OUT1, rgb_color=(0, 255, 0))
+    assert fake_controller.commands() == [_control('{"fx":"Off"}')]
+    assert _state(hass, OUT1).state == STATE_ON
 
 
 @pytest.mark.parametrize("host", ["127.0.0.1", "not a host"], ids=["silent", "host-the-library-rejects"])

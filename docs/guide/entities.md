@@ -111,13 +111,16 @@ truthfully. A vendor controller is therefore either in **scene mode** (it runs a
   outputs, pixel lights) without sending black: effects stop and the keepalive stops re-sending, so the controller's
   scene shows. A scene started from the controller's own UI or app does the same once the 30 s poll sees it.
 - Turning on any DDP light, or `ddp.set_pattern`, while a scene runs first turns the controller `Off`, then drives the
-  pixels. If the controller does not answer, the action fails and nothing is sent.
+  pixels. If the controller does not answer, the action fails and nothing is sent. If the controller has not been
+  read since startup (its web UI was down), turning it `Off` is tried but not required: DDP goes ahead, and the first
+  good poll turns the DDP lights off if a scene runs.
 - In DDP mode the DDP lights work as on a Generic DDP controller: an off output stays black (held by the keepalive)
   while another DDP light is on; when the last one turns off, DDP stops and about 20 s later the controller shows its
   own `Off`. Turning the controller light off selects `Off` and leaves DDP mode alone.
 - Palette changes (Color 1 to 5, `ddp.set_colors`) change no mode.
 - After a Home Assistant restart the DDP lights restore and re-send their last look only if the controller is not
-  running a scene; setup reads the controller's state and never commands it.
+  running a scene (setup reads its state and never commands it; if it cannot be read, they are re-sent and the first
+  good poll turns them off if a scene runs). The off DDP lights next to a restored one are held black.
 
 ## Actions
 

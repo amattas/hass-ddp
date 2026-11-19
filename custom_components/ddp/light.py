@@ -24,8 +24,9 @@ pixels over a running scene could never be shown truthfully. The controller devi
 ``ddp.recall_preset`` start a scene; once the controller took the command every DDP light goes off (sending nothing)
 and the sender is released (``ControllerCommands``); a poll that finds a scene started outside HA does the same.
 Turning a DDP light on while a scene runs first turns the controller off (its "Off"), and fails without sending if it
-cannot. "Color 1".."Color 5" set one slot each of the palette those effects use, which leaves DDP
-alone (``ddp.set_colors`` on the controller light sets them all);
+cannot (with the controller never read, the Off is best effort). In DDP mode a change never waits on the controller.
+"Color 1".."Color 5" set one slot each of the palette those effects use, which leaves DDP alone (``ddp.set_colors`` on
+the controller light sets them all);
 a Color tab sets a custom color, a Temperature tab a white: the controller's own at either end, HA's kelvin -> RGB in
 between (the controller converts RGB to its pixels itself).
 """
@@ -34,8 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Mapping, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -366,15 +366,21 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
         # A light that showed a scene (stored by an earlier version) was not driven by DDP.
         if last.state != STATE_ON or look.get(ATTR_SOURCE, LightSource.DDP) != LightSource.DDP:
             return
-        if self._runtime.scene_running:
-            return
-        try:
-            async with self._lock:
-                await self._send_on()
-        except HomeAssistantError as err:
-            _LOGGER.warning("Could not restore %s: %s", self.entity_id, err)
-            return
-        self._source = LightSource.DDP
+        runtime = self._runtime
+        # Under ``ownership``, as any DDP change: a scene seen by setup (or a poll since) keeps the light off. With
+        # the mode unknown it is re-sent; the first good poll turns it off if a scene runs. Setup never commands the
+        # controller. The holds follow, so the off lights next to it are black and held (each once: later restores
+        # find them held).
+        async with runtime.ownership:
+            if runtime.scene_running:
+                return
+            try:
+                async with self._lock:
+                    await self._send_on()
+                self._source = LightSource.DDP
+                await self._sync_holds()
+            except HomeAssistantError as err:
+                _LOGGER.warning("Could not restore %s: %s", self.entity_id, err)
 
     def _restored_pattern(self, value: object) -> Pattern | None:
         """The stored pattern, if it still validates for the restored effect (aioddp may have changed)."""
@@ -479,7 +485,8 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
     async def _apply(self, brightness: int | None, color: Color, effect: str, pattern: Pattern | None) -> None:
         """Leave scene mode, take the pixels from overlapping lights, then show this look; a failed send keeps the
         previous one."""
-        async with self._exclusive(leave_scene=True):
+
+        async def change() -> None:
             await self._take_pixels()
             async with self._lock:
                 previous = (self._attr_brightness, self._color, self._attr_effect, self._pattern)
@@ -492,25 +499,34 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
                     raise
                 self._source = LightSource.DDP
             await self._sync_holds()
+
+        await self._drive(change)
         self.async_write_ha_state()
 
-    @asynccontextmanager
-    async def _exclusive(self, *, leave_scene: bool) -> AsyncIterator[None]:
-        """Hold the locks for a change to the DDP lights: the controller's (a vendor entry: scene and DDP mode are
-        exclusive, so a scene command or poll never interleaves), then ``ownership`` (two lights sharing pixels never
-        take them at the same time). With ``leave_scene``, a running scene is first turned off on the controller; if
-        that fails, the change sends nothing."""
+    async def _drive(self, change: Callable[[], Awaitable[None]]) -> None:
+        """Run ``change`` (it drives pixels over DDP) under ``ownership``, in DDP mode.
+
+        Scene mode and DDP mode are exclusive on a vendor controller. In DDP mode (the common case) only ``ownership``
+        is taken, so the change never waits for a poll or the controller's HTTP UI; ``scene_mode`` is checked under
+        it, and scene commands and polls change it under it too. Otherwise (a scene runs, or the mode is unknown) the
+        change takes the coordinator's lock, so no scene command or poll interleaves, turns the controller off
+        (``ControllerCommands.leave_scene``; a running scene that cannot be turned off fails the change, nothing
+        sent), then runs.
+        """
         runtime = self._runtime
         commands = runtime.commands
-        if commands is None:
+        if commands is None:  # Generic DDP: no controller, no modes
             async with runtime.ownership:
-                yield
+                await change()
             return
+        async with runtime.ownership:
+            if runtime.scene_mode is False:
+                await change()
+                return
         async with commands.coordinator.lock:
-            if leave_scene:
-                await commands.leave_scene(self.entity_id)
+            await commands.leave_scene(self.entity_id)
             async with runtime.ownership:
-                yield
+                await change()
 
     async def _sync_holds(self) -> None:
         """``DDPRuntime.sync_holds`` for a change this light made; a failed black frame is this light's error."""
@@ -534,7 +550,7 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
         (this light was handed back, so it is off) or runs after.
         """
         runtime = self._runtime
-        async with self._exclusive(leave_scene=False):
+        async with runtime.ownership:
             async with self._lock:
                 await runtime.stop_runner(self._config.key)
                 if not self.is_on:

@@ -124,6 +124,11 @@ class FakeController:
             self.pages["/pfx2.html"],
         )
 
+    def selected(self) -> str | None:
+        """The effect the effects page shows selected, ``None`` if none is."""
+        match = re.search(r"""class='psel button' onclick='fx2b\("([^"]+)",""", self.pages["/pfx2.html"])
+        return match.group(1) if match else None
+
     def set_color(self, slot: int, color: str) -> None:
         """Show ``color`` (``#rrggbb``) in palette cell ``slot`` (6 is the background), as the colors page does."""
         page = self.pages["/pcolors.html"]

@@ -282,6 +282,18 @@ Superseded by 2026-11-19 (scene mode and DDP mode are exclusive).
   controller-off blanking in 2026-11-06 "controller device entities" ("off = controller Off plus blanking the
   DDP-driven segments"), and in 2026-11-18 the scene cases of the interaction rule (a light showing the scene stays
   `scene`; blanking over a running scene; the generalized blanked-source paragraph).
+- Implementation notes (2026-11-19, after a verifier refuted the first cut): the DDP lights keep their own model of
+  the controller, `DDPRuntime.scene_mode` (scene / DDP / unknown), changed only under `ownership` by setup's read,
+  every poll, and the controller commands. A scene command the controller took counts as a running scene even if the
+  read-back fails (a recalled preset whose read failed left the model at Off, so the next DDP turn_on skipped the
+  Off); the next poll corrects it. In DDP mode a DDP change takes only `ownership` (it never waits on a poll's HTTP:
+  with a 2 s page delay a turn_on took about 6 s), and scene commands and polls flip the mode and hand the lights
+  back in one `ownership` section, so the change either ran before (and is turned off) or sees the scene. Outside DDP
+  mode the change takes the coordinator lock, then `leave_scene`, then `ownership`. Unknown mode (never read): the Off
+  is best effort; if the controller does not answer, DDP goes ahead, the mode is assumed DDP until a poll reads the
+  controller (so not every DDP change waits on a dead host), and the first good poll turns the DDP lights off if a
+  scene runs. Restore runs under `ownership` and syncs the holds, so the off lights next to a restored one are black
+  and held (each once; later restores find them held).
 - Assumption, not measured on hardware: after HA stops sending (a scene command), the NDB-Pro shows its scene again
   once it notices DDP stopped, possibly only after its DDP timeout (about 20 s). The code sends nothing to speed this
   up; until then the last DDP frame may linger. The README says so.

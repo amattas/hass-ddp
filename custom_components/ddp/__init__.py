@@ -20,7 +20,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import service
 from homeassistant.helpers.typing import ConfigType
 
-from .commands import ControllerCommands
+from .commands import ControllerCommands, scene_mode
 from .const import (
     ATTR_BACKGROUND,
     ATTR_BLOCK_SIZE,
@@ -36,7 +36,6 @@ from .const import (
     CONF_MODEL,
     CONF_PIXEL_COUNT,
     CONF_SEGMENTS,
-    CONTROLLER_OFF,
     DATA_TYPE_RGBW,
     DEFAULT_BRIGHTNESS_CAP,
     DEFAULT_COLOR_ORDER,
@@ -110,12 +109,16 @@ class DDPRuntime:
     runners: dict[str, EffectRunner] = field(default_factory=dict)
     segment_lights: list[DDPSegmentLight] = field(default_factory=list)
     ownership: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Scene mode (True: the controller runs a scene, every DDP light is off), DDP mode (False), or unknown (None: the
+    # controller has not been read yet). The DDP lights' model of the controller, changed only under ``ownership`` by
+    # setup, polls and controller commands (a scene command counts as running once the controller took it, even if
+    # the read-back fails), so a DDP change that checks it under ``ownership`` never misses a scene start.
+    scene_mode: bool | None = None
 
     @property
     def scene_running(self) -> bool:
-        """The controller runs a scene, as last read or commanded (scene mode: every DDP light is off)."""
-        data = self.scenes.data if self.scenes is not None else None
-        return data is not None and data.effect not in (None, CONTROLLER_OFF)
+        """Scene mode: the controller runs a scene, as last read or commanded; every DDP light is off."""
+        return self.scene_mode is True
 
     @property
     def ddp_driving(self) -> bool:
@@ -286,8 +289,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
     if scenes is not None:
         runtime.commands = ControllerCommands(runtime, scenes)
         # Not a setup gate: the DDP lights don't need the controller's HTTP UI, so a silent one leaves the controller
-        # device's entities unavailable until a poll reaches them, instead of failing the entry.
+        # device's entities unavailable until a poll reaches them, instead of failing the entry. The mode is then
+        # unknown: a DDP light turned on tries the controller's Off best effort and goes ahead if it does not answer.
         await scenes.async_refresh()
+        runtime.scene_mode = scene_mode(scenes.data.effect if scenes.data is not None else None)
         # Polls reach the DDP lights through the commands, whichever controller entities are enabled.
         scenes.on_poll = runtime.commands.follow_poll
         entry.async_on_unload(_stop_following(scenes))

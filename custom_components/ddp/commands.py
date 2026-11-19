@@ -33,6 +33,12 @@ from .coordinator import DDPScenesCoordinator, SceneState
 if TYPE_CHECKING:
     from . import DDPRuntime
 
+
+def scene_mode(effect: str | None) -> bool | None:
+    """The mode a read effect means: a scene (``True``), "Off" (``False``), or unknown (``None``)."""
+    return None if effect is None else effect != CONTROLLER_OFF
+
+
 _LOGGER = logging.getLogger(__name__)
 
 # A palette slot holds a custom color or one of the controller's whites (sent as its exact value).
@@ -84,7 +90,7 @@ class ControllerCommands:
                 await self.coordinator.controller.set_effect(effect)
             except CONTROLLER_ERRORS as err:
                 raise controller_error(entity_id, err) from err
-            await self._hand_back()  # only once the controller took the command: a failure keeps the DDP look
+            await self._enter_scene_mode()  # only once the controller took the command: a failure keeps DDP
             self._publish(effect=effect)
 
     async def turn_off(self, entity_id: str | None) -> None:
@@ -93,16 +99,32 @@ class ControllerCommands:
             await self._controller_off(entity_id)
 
     async def leave_scene(self, entity_id: str | None) -> None:
-        """Before a DDP light drives pixels: turn the controller off if it runs a scene (raises ``controller_failed``
-        if it cannot, so nothing is sent). Caller holds the coordinator's lock."""
-        if self._runtime.scene_running:
+        """Before a DDP light drives pixels outside DDP mode: turn the controller off. Caller holds the coordinator's
+        lock (no scene command or poll can start a scene until the DDP light drove its pixels).
+
+        A running scene that cannot be turned off raises ``controller_failed``, so nothing is sent. With the mode
+        unknown (the controller was never read) this is best effort: if the controller does not answer, DDP goes
+        ahead (it overrides the controller's effects anyway) and the first good poll decides, turning the DDP lights
+        off if a scene runs.
+        """
+        runtime = self._runtime
+        if runtime.scene_mode is False:
+            return
+        if runtime.scene_mode is True:
             await self._controller_off(entity_id)
+            return
+        try:
+            await self._controller_off(entity_id)
+        except HomeAssistantError as err:
+            _LOGGER.warning("Could not turn %s off before driving DDP; going ahead: %s", self.coordinator.name, err)
+            runtime.scene_mode = False  # assumed until a poll reads the controller: no request per DDP change
 
     async def _controller_off(self, entity_id: str | None) -> None:
         try:
             await self.coordinator.controller.set_effect(CONTROLLER_OFF)
         except CONTROLLER_ERRORS as err:
             raise controller_error(entity_id, err) from err
+        self._runtime.scene_mode = False  # DDP lights are off in scene mode, so leaving it changes none of them
         self._publish(effect=CONTROLLER_OFF)
 
     async def set_intensity(self, entity_id: str | None, percent: int) -> None:
@@ -121,7 +143,8 @@ class ControllerCommands:
                 await self.coordinator.controller.recall_preset(preset - 1)
             except CONTROLLER_ERRORS as err:
                 raise controller_error(entity_id, err) from err
-            await self._hand_back()
+            # The controller took the preset, so a scene runs, whatever the read-back says (the next poll corrects it).
+            await self._enter_scene_mode()
             await self.coordinator.async_read_after_command()
 
     async def set_palette(
@@ -167,17 +190,24 @@ class ControllerCommands:
         The coordinator's ``on_poll``: it runs under the coordinator's lock before the poll publishes, so commands
         never trigger it.
         """
-        if state.effect is not None and state.effect != CONTROLLER_OFF:
-            await self._hand_back()
+        mode = scene_mode(state.effect)
+        if mode:
+            await self._enter_scene_mode()
+        elif mode is False:
+            async with self._runtime.ownership:
+                self._runtime.scene_mode = False
 
     def _publish(self, **changes: Any) -> None:
         """Publish a commanded change as the coordinator's data, keeping everything the command did not change."""
         self.coordinator.publish(replace(self.coordinator.data or SceneState(None, None, ()), **changes))
 
-    async def _hand_back(self) -> None:
-        """Scene mode: every DDP light off without sending, and nothing held, so DDP stops overriding the scene."""
+    async def _enter_scene_mode(self) -> None:
+        """Scene mode: every DDP light off without sending, and nothing held, so DDP stops overriding the scene. The
+        mode and the lights change in one ``ownership`` section, so a DDP change either ran before (and is turned off
+        here) or sees the scene."""
         runtime = self._runtime
         async with runtime.ownership:
+            runtime.scene_mode = True
             for light in runtime.segment_lights:
                 await light.async_hand_back()
             runtime.sender.release()
