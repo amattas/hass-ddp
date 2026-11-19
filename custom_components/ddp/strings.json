@@ -39,19 +39,17 @@
         "data": {
           "name": "Name",
           "first_pixel": "First pixel",
-          "last_pixel": "Last pixel",
-          "reversed": "Reversed"
+          "last_pixel": "Last pixel"
         },
         "data_description": {
           "name": "The light's name.",
           "first_pixel": "First pixel of this output, counting from 1.",
-          "last_pixel": "Last pixel of this output, included.",
-          "reversed": "The controller reverses this output, so its pixel lights count from the other end: Light 1 is the last pixel of the range. It does not change what DDP sends. Prefilled from the controller's layout when it reports one; set it by hand for a Generic DDP controller that reverses the port."
+          "last_pixel": "Last pixel of this output, included."
         }
       },
       "reconfigure": {
         "title": "Reconfigure the controller",
-        "description": "Detected controller: {detected}. Stored pixel type: {data_type}. Layout the controller reports now: {layout}. Submitting continues to the output steps, prefilled from the layout the controller reports now (pixel type and outputs, keeping the names and Reversed flags you stored), so a change of the controller's input mode (3 or 4 channels) takes effect; an output that is gone loses its light. Generic DDP, or a controller that reports no layout (none), prefills them with the stored outputs. Changing the host keeps the device and its lights. Changing the type adds or removes the controller device and its entities; the DDP lights are kept.",
+        "description": "Detected controller: {detected}. Stored pixel type: {data_type}. Layout the controller reports now: {layout}. Submitting continues to the output steps, prefilled from the layout the controller reports now (pixel type and outputs, keeping the names you stored), so a change of the controller's input mode (3 or 4 channels) takes effect; an output that is gone loses its light. Generic DDP, or a controller that reports no layout (none), prefills them with the stored outputs. Changing the host keeps the device and its lights. Changing the type adds or removes the controller device and its entities; the DDP lights are kept.",
         "data": {
           "host": "Host",
           "controller_type": "Controller type"
@@ -220,6 +218,9 @@
         }
       },
       "pixel": {
+        "name": "Light {number}"
+      },
+      "output_pixel": {
         "name": "{output} Light {number}"
       }
     },

@@ -23,9 +23,8 @@ SEGMENT_KEY: Final = "key"
 SEGMENT_NAME: Final = "name"
 SEGMENT_START: Final = "start"
 SEGMENT_LENGTH: Final = "length"
-# The controller reverses this output, so its pixel lights count from its last pixel. The flow always stores it;
-# entries from before it have none (read as false; a reconfigure from the layout fills it).
-SEGMENT_REVERSED: Final = "reversed"
+# 0.6.0 stored a per-output "reversed" flag; it is ignored (the controller applies its port reverse itself) and the
+# flow no longer writes it.
 
 DATA_TYPE_RGB: Final = "rgb"
 DATA_TYPE_RGBW: Final = "rgbw"

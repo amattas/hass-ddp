@@ -29,6 +29,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant, State
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -576,10 +577,11 @@ async def test_concurrent_take_holds_black_for_the_off_outputs(
     # on: with no frame to freeze, All outputs sends its color, held.
     entry = entry_factory(controller=fake_controller if vendor else None, options={"pixel_lights": True})
     await _setup(hass, entry)
-    prefix = "light.ndb_pro_generic_ddp_" if vendor else "light.ndb_pro_"
-    all_outputs = f"{prefix}all_outputs"
+    all_outputs = "light.ndb_pro_generic_ddp_all_outputs" if vendor else ALL  # output lights: light.ndb_pro_output_N
 
-    await asyncio.gather(_turn_on(hass, all_outputs, effect="chase"), _turn_on(hass, prefix + taker, rgb_color=RED))
+    await asyncio.gather(
+        _turn_on(hass, all_outputs, effect="chase"), _turn_on(hass, f"light.ndb_pro_{taker}", rgb_color=RED)
+    )
     await udp_listener.settle()
 
     assert_holds_follow_lights(entry.runtime_data)
@@ -589,10 +591,11 @@ async def test_concurrent_take_holds_black_for_the_off_outputs(
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
+@pytest.mark.parametrize("outputs", [2, 1], ids=["two-outputs", "one-output"])
 async def test_pixel_lights_follow_the_option(
-    hass: HomeAssistant, udp_listener: Listener, entry_factory: Callable[..., MockConfigEntry]
+    hass: HomeAssistant, udp_listener: Listener, entry_factory: Callable[..., MockConfigEntry], outputs: int
 ) -> None:
-    entry = entry_factory(options={"pixel_lights": True})
+    entry = entry_factory(options={"pixel_lights": True}, segments=SEGMENTS[:outputs])
     await _setup(hass, entry)
     registry = er.async_get(hass)
 
@@ -601,15 +604,22 @@ async def test_pixel_lights_follow_the_option(
         return sorted(e.unique_id for e in entries if "_pixel" in e.unique_id)
 
     # One light per pixel of every output, numbered from 1 along each output, next to the output lights.
-    keys = [f"output{output}_pixel{n}" for output, count in ((1, 80), (2, 42)) for n in range(1, count + 1)]
+    counts = ((1, 80), (2, 42))[:outputs]
+    keys = [f"output{output}_pixel{n}" for output, count in counts for n in range(1, count + 1)]
     assert pixel_ids() == sorted(f"{entry.entry_id}_{key}" for key in keys)
-    assert registry.async_get_entity_id(LIGHT_DOMAIN, DOMAIN, f"{entry.entry_id}_output2_pixel42") == _pixel(2, 42)
-    state = hass.states.get(_pixel(2, 42))
+    last, count = counts[-1]
+    pixel = _pixel(last, count)
+    assert registry.async_get_entity_id(LIGHT_DOMAIN, DOMAIN, f"{entry.entry_id}_output{last}_pixel{count}") == pixel
+    state = hass.states.get(pixel)
     assert state is not None
-    assert (state.state, state.name) == (STATE_OFF, "NDB-Pro Output 2 Light 42")
+    # Named "Light N" on its output's device (several outputs), or after the output on the DDP device (one output).
+    assert (state.state, state.name) == (STATE_OFF, f"NDB-Pro Output {last} Light {count}")
+    device = dr.async_get(hass).async_get(registry.async_get(pixel).device_id)  # type: ignore[union-attr,arg-type]
+    assert device is not None
+    assert device.identifiers == {(DOMAIN, f"127.0.0.1:output{last}" if outputs > 1 else "127.0.0.1")}
     assert state.attributes[ATTR_SUPPORTED_COLOR_MODES] == [ColorMode.RGB]
     assert ATTR_EFFECT_LIST not in state.attributes  # a pixel has no effects
-    assert hass.states.get(OUT2) is not None and hass.states.get(ALL) is not None
+    assert (hass.states.get(ALL) is not None) == (outputs > 1)
     await udp_listener.settle()
     assert udp_listener.packets == []  # setup sends nothing
 
@@ -618,15 +628,15 @@ async def test_pixel_lights_follow_the_option(
     assert await hass.config_entries.async_reload(entry.entry_id)
     await hass.async_block_till_done()
     assert pixel_ids() == []
-    assert hass.states.get(_pixel(2, 42)) is None
-    assert hass.states.get(OUT2) is not None
+    assert hass.states.get(pixel) is None
+    assert hass.states.get(f"light.ndb_pro_output_{last}") is not None
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 @pytest.mark.parametrize(
     ("rev", "number", "pixel"),
-    [(False, 1, 80), (False, 42, 121), (True, 1, 121), (True, 42, 80)],
-    ids=["first", "last", "reversed-first", "reversed-last"],
+    [(False, 1, 80), (False, 42, 121), (True, 1, 80)],
+    ids=["first", "last", "stored-reversed-flag-ignored"],
 )
 async def test_pixel_light_lights_its_physical_pixel(
     hass: HomeAssistant,
@@ -636,7 +646,8 @@ async def test_pixel_light_lights_its_physical_pixel(
     number: int,
     pixel: int,
 ) -> None:
-    # Light 1 is the first pixel along the installed string: on a port the controller reverses, the last DDP pixel.
+    # Light N is DDP pixel start + N - 1: a controller that reverses a port applies that itself (DDP order is already
+    # the string's order). A 0.6.0 entry may have stored a Reversed flag; it is ignored.
     segments = [SEGMENTS[0], {**SEGMENTS[1], "reversed": True}] if rev else SEGMENTS
     entry = entry_factory(options=PIXEL_OPTIONS, segments=segments)
     await _setup(hass, entry)

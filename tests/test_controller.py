@@ -35,6 +35,7 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON, STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import HomeAssistant, State
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import color as color_util
@@ -50,14 +51,14 @@ from custom_components.ddp.const import DOMAIN, LightSource
 from custom_components.ddp.controller import detect, fetch_layout
 from custom_components.ddp.coordinator import SCAN_INTERVAL
 
-from .conftest import FakeController, Listener, assert_holds_follow_lights
+from .conftest import SEGMENTS, FakeController, Listener, assert_holds_follow_lights
 
 MAIN = "light.ndb_pro_minleon_ndb_pro"  # the controller device "NDB-Pro Minleon NDB-Pro"'s main entity
 SCENE = "select.ndb_pro_minleon_ndb_pro_scene"
 COLORS = [f"light.ndb_pro_minleon_ndb_pro_color_{slot}" for slot in range(1, 6)]
-OUT1 = "light.ndb_pro_generic_ddp_output_1"  # the DDP device of a vendor entry is "NDB-Pro Generic DDP"
-OUT2 = "light.ndb_pro_generic_ddp_output_2"
-ALL = "light.ndb_pro_generic_ddp_all_outputs"
+OUT1 = "light.ndb_pro_output_1"  # the main entity of the output's own device, "NDB-Pro Output 1"
+OUT2 = "light.ndb_pro_output_2"
+ALL = "light.ndb_pro_generic_ddp_all_outputs"  # on the DDP device, "NDB-Pro Generic DDP" for a vendor entry
 OUT2_OFFSET = 80 * 3
 BLACK_OUT2 = bytes(42 * 3)
 DDP_LIGHTS = [OUT1, OUT2, ALL]
@@ -137,13 +138,31 @@ async def test_devices_and_names(
     controller_device = device_registry.async_get_device_by_identifier((DOMAIN, "127.0.0.1:controller"), entry.entry_id)
     assert ddp_device is not None
     assert (ddp_device.manufacturer, ddp_device.model) == ("Minleon", "NDBPRO")
+    # One device per output, named after the entry and the output, connected through the DDP device; its light is
+    # the main entity. All outputs stays on the DDP device.
+    for number, entity_id in enumerate((OUT1, OUT2), start=1):
+        output = device_registry.async_get_device_by_identifier((DOMAIN, f"127.0.0.1:output{number}"), entry.entry_id)
+        assert output is not None
+        assert (output.name, output.manufacturer, output.model, output.sw_version, output.via_device_id) == (
+            f"NDB-Pro Output {number}",
+            "Minleon",
+            "NDBPRO",
+            "1.2.3",
+            ddp_device.id,
+        )
+        registered = entity_registry.async_get(entity_id)
+        assert registered is not None
+        assert (_state(hass, entity_id).name, registered.unique_id, registered.device_id) == (
+            f"NDB-Pro Output {number}",
+            f"{entry.entry_id}_output{number}",
+            output.id,
+        )
+    devices = dr.async_entries_for_config_entry(device_registry, entry.entry_id)
+    assert len(devices) == (3 if controller_type == "generic" else 4)
     if controller_type == "generic":
-        # One device, named after the entry; no controller entities.
+        # The DDP device is named after the entry; no controller entities.
         assert ddp_device.name == "NDB-Pro"
-        assert [_state(hass, e).name for e in ["light.ndb_pro_output_1", "light.ndb_pro_all_outputs"]] == [
-            "NDB-Pro Output 1",
-            "NDB-Pro All outputs",
-        ]
+        assert _state(hass, "light.ndb_pro_all_outputs").name == "NDB-Pro All outputs"
         assert controller_device is None
         assert {e.domain for e in er.async_entries_for_config_entry(entity_registry, entry.entry_id)} == {"light"}
         assert len(er.async_entries_for_config_entry(entity_registry, entry.entry_id)) == 3
@@ -161,7 +180,6 @@ async def test_devices_and_names(
         controller_device.via_device_id,
     ) == ("NDB-Pro Minleon NDB-Pro", "Minleon", "NDBPRO", "1.2.3", ddp_device.id)
     names = {
-        OUT1: ("NDB-Pro Generic DDP Output 1", "output1", ddp_device),
         ALL: ("NDB-Pro Generic DDP All outputs", "strip", ddp_device),
         MAIN: ("NDB-Pro Minleon NDB-Pro", "controller", controller_device),
         SCENE: ("NDB-Pro Minleon NDB-Pro Scene", "scene", controller_device),
@@ -185,6 +203,120 @@ async def test_devices_and_names(
     assert (scene.state, scene.attributes["options"]) == ("Glow", EFFECTS)  # the fixture page's selected effect
     assert [_state(hass, e).state for e in COLORS] == [STATE_ON] + [STATE_OFF] * 4  # bc1 #be38f3, the rest empty
     assert fake_controller.commands() == []  # setup only reads
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize(
+    ("controller_type", "prefix"),
+    [("generic", "ndb_pro_"), ("ndbpro", "ndb_pro_generic_ddp_")],
+    ids=["generic", "vendor"],
+)
+async def test_upgrade_moves_the_output_lights_to_their_devices_keeping_entity_ids(
+    hass: HomeAssistant,
+    caplog: pytest.LogCaptureFixture,
+    entity_registry: er.EntityRegistry,
+    device_registry: dr.DeviceRegistry,
+    fake_controller: FakeController,
+    entry_factory: Callable[..., MockConfigEntry],
+    controller_type: str,
+    prefix: str,
+) -> None:
+    # A 0.6.0 entry: every DDP light on the DDP device (a vendor entry's named "NDB-Pro Generic DDP ..."), which the
+    # user put in an area and renamed.
+    entry = entry_factory(controller=fake_controller, controller_type=controller_type, options={"pixel_lights": True})
+    garden, porch = ar.async_get(hass).async_create("Garden"), ar.async_get(hass).async_create("Porch")
+    ddp_device = device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, "127.0.0.1")}
+    )
+    device_registry.async_update_device(ddp_device.id, name_by_user="My Strip", area_id=garden.id)
+    old = {
+        key: entity_registry.async_get_or_create(
+            LIGHT_DOMAIN,
+            DOMAIN,
+            f"{entry.entry_id}_{key}",
+            config_entry=entry,
+            device_id=ddp_device.id,
+            suggested_object_id=f"{prefix}{object_id}",
+        ).entity_id
+        for key, object_id in [
+            ("output1", "output_1"),
+            ("output2_pixel5", "output_2_light_5"),
+            ("strip", "all_outputs"),
+        ]
+    }
+    await _setup(hass, entry)
+
+    def device_of(entity_id: str) -> dr.DeviceEntry:
+        registered = entity_registry.async_get(entity_id)
+        assert registered is not None
+        device = device_registry.async_get(registered.device_id)  # type: ignore[arg-type]
+        assert device is not None
+        return device
+
+    # Same unique IDs and entity IDs; the output lights and pixel lights now sit on their output's device, created in
+    # the DDP device's area and, as it was renamed, named after its name: area targeting and friendly names hold.
+    for key, entity_id in old.items():
+        assert entity_registry.async_get(entity_id).unique_id == f"{entry.entry_id}_{key}"  # type: ignore[union-attr]
+        device = device_of(entity_id)
+        output = key.split("_")[0]
+        expected = {(DOMAIN, "127.0.0.1")} if key == "strip" else {(DOMAIN, f"127.0.0.1:{output}")}
+        assert device.identifiers == expected
+        assert device.area_id == garden.id
+        assert _state(hass, entity_id).state == STATE_OFF
+    assert device_of(old["output1"]).name_by_user == "My Strip Output 1"
+    names = [_state(hass, old[key]).name for key in ("output1", "output2_pixel5", "strip")]
+    assert names == ["My Strip Output 1", "My Strip Output 2 Light 5", "My Strip All outputs"]
+
+    async def reload(**changes: Any) -> None:
+        hass.config_entries.async_update_entry(entry, **changes)
+        assert await hass.config_entries.async_reload(entry.entry_id)
+        await hass.async_block_till_done()
+
+    # What the user sets on an output device later is theirs: a reload, and dropping to one output and back (HA
+    # restores the removed device with its name and area), never copy the DDP device's again.
+    output1 = device_of(old["output1"])
+    device_registry.async_update_device(output1.id, name_by_user="Eave", area_id=porch.id)
+    await reload()
+    segments = entry.data["segments"]
+    await reload(data={**entry.data, "segments": segments[:1], "pixel_count": 80})
+    assert device_of(old["output1"]).identifiers == {(DOMAIN, "127.0.0.1")}
+    await reload(data={**entry.data, "segments": segments, "pixel_count": 122})
+    restored = device_of(old["output1"])
+    assert (restored.id, restored.name_by_user, restored.area_id) == (output1.id, "Eave", porch.id)
+    assert _state(hass, old["output1"]).name == "Eave"
+    assert "deprecated" not in caplog.text  # only the device registry's public API
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+@pytest.mark.parametrize("named", [False, True], ids=["default-name", "renamed"])
+async def test_a_new_output_device_takes_the_ddp_devices_area(
+    hass: HomeAssistant,
+    device_registry: dr.DeviceRegistry,
+    entry_factory: Callable[..., MockConfigEntry],
+    named: bool,
+) -> None:
+    # A Generic entry going from one output to two: the new output devices take the DDP device's area, and its
+    # user-set name (else their default name).
+    garden = ar.async_get(hass).async_create("Garden")
+    entry = entry_factory(segments=[{"key": "output1", "name": "Output 1", "start": 0, "length": 80}])
+    await _setup(hass, entry)
+    ddp_device = device_registry.async_get_device_by_identifier((DOMAIN, "127.0.0.1"), entry.entry_id)
+    assert ddp_device is not None
+    device_registry.async_update_device(ddp_device.id, area_id=garden.id, name_by_user="My Strip" if named else None)
+    hass.config_entries.async_update_entry(entry, data={**entry.data, "segments": SEGMENTS, "pixel_count": 122})
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+
+    output2 = device_registry.async_get_device_by_identifier((DOMAIN, "127.0.0.1:output2"), entry.entry_id)
+    assert output2 is not None
+    assert (output2.area_id, output2.name, output2.name_by_user) == (
+        garden.id,
+        "NDB-Pro Output 2",
+        "My Strip Output 2" if named else None,
+    )
+    entity_id = er.async_get(hass).async_get_entity_id(LIGHT_DOMAIN, DOMAIN, f"{entry.entry_id}_output2")
+    assert entity_id is not None
+    assert _state(hass, entity_id).name == ("My Strip Output 2" if named else "NDB-Pro Output 2")
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 

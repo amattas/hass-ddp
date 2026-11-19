@@ -35,16 +35,20 @@ one registry entry). See `DECISIONS.md`.
 - `coordinator.py`: `DDPScenesCoordinator` (30 s poll of the controller state and palette); `lock` serializes polls and
   commands, so a stale poll cannot undo a command; `on_poll`; `last_effect`. `diagnostics.py`: redacted entry, sender,
   and controller documents
-- `entity.py`: `DDPEntity` base (unique IDs). Two devices per vendor entry: the DDP device `(DOMAIN, host)`, named
-  "<title> Generic DDP" (the title alone for Generic), and the controller device `(DOMAIN, host:controller)`, linked
-  by `via_device_id`, for the controller light, Color 1-5 and Scene; `ControllerEntity` is their coordinator-entity
-  base. `DeviceInfo` is built in one call (since HA 2026.11 it is not a dict)
+- `entity.py`: `DDPEntity` base (unique IDs; `device_info` picks the device, the DDP device by default). Devices: the
+  DDP device `(DOMAIN, host)`, named "<title> Generic DDP" (the title alone for Generic), with All outputs; with more
+  than one output one device per output `(DOMAIN, host:<segment key>)` (`output_identifier`, `output_device_info`),
+  named "<title> <output name>", its light the main entity and its pixel lights "Light N" (`register_output_device`:
+  a newly created one takes the DDP device's area and user-set name + output name; existing or restored ones untouched); for a vendor entry the
+  controller device `(DOMAIN, host:controller)` for the controller light, Color 1-5 and Scene. Child devices link by
+  `via_device_id` (`child_device_info`); `ControllerEntity` is the controller entities' coordinator-entity base.
+  `DeviceInfo` is built in one call (since HA 2026.11 it is not a dict)
 - `controller.py`: controller type registry, `Controller` protocol, `detect`, `create_controller`, `fetch_layout`
 - `config_flow.py`: host -> `aioddp.discover` + `detect` -> controller type step (detected preselected, Generic always
   offered) -> for every type the manual steps (prefilled from the detected layout if any, keeping its title and
   device info): pixel type + number of outputs, then one `output` step per output (name, 1-based first/last pixel;
-  gaps allowed, overlaps refused; pixel count = highest last pixel; a prefilled output keeps its segment key; a
-  "Reversed" box, always stored, prefilled from the layout's `rev`; a layout reconfigure keeps a stored flag per key);
+  gaps allowed, overlaps refused; pixel count = highest last pixel; a prefilled output keeps its segment key; a 0.6.0
+  `reversed` flag in stored segments is ignored and no longer written);
   reconfigure changes host/type, re-reads the layout for a vendor type, and walks the same manual/output steps,
   prefilled from the read layout (stored names kept per key, its device info stored) or else the stored segments;
   options flow (cap, color order, fps, keepalive, `pixel_lights`)
@@ -54,10 +58,11 @@ one registry entry). See `DECISIONS.md`.
   coordinator lock, `leave_scene`, then `ownership`; restore sends nothing in scene mode and syncs the holds; `AllOutputsLight` over the whole strip when there is more than one segment (DDP lights
   that share pixels hand them to each other without sending); `PaletteLight` "Color 1".."Color 5", one palette slot
   each: RGB, or color temperature (2700 K warm, 6500 K cool) while it holds a white. `PixelLight` (option
-  `pixel_lights`): one per pixel of every output, "<output> Light N" in physical order (a `reversed` output counts
-  from its last DDP pixel), unique ID `<segment key>_pixel<N>`, no effects or patterns; it never turns its output off (freezes an effect)
+  `pixel_lights`): one per pixel of every output, Light N = DDP pixel `start + N - 1` (the controller applies a port
+  reverse itself), "Light N" on its output's device (`OutputPixelLight`: "<output> Light N" on the DDP device when
+  there is one output), unique ID `<segment key>_pixel<N>`, no effects or patterns; it never turns its output off (freezes an effect)
   (DECISIONS.md 2026-11-18). Overlap lists are computed once at setup (`link`). Setup removes any light of the entry
-  it did not create
+  it did not create and any device it no longer has (an output's, the controller's), detaching the lights it keeps
 - `light.py` also has `ControllerLight`, the controller device's main entity (no name; brightness = intensity): on = a scene runs, off = the controller's
   Off; `colors`/`background` attributes, `last_effect` restore, `ddp.recall_preset`, `ddp.set_colors`.
   `select.py`: `SceneSelect` (the controller's effects without Off).

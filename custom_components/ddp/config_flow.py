@@ -60,11 +60,10 @@ from .const import (
     SEGMENT_KEY,
     SEGMENT_LENGTH,
     SEGMENT_NAME,
-    SEGMENT_REVERSED,
     SEGMENT_START,
 )
 from .controller import CONTROLLER_TYPES, TYPE_GENERIC, detect, fetch_layout
-from .entity import device_identifiers
+from .entity import device_identifiers, output_identifier
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -99,15 +98,13 @@ def _manual_schema(data_type: str, outputs: int) -> probatio.Schema:
     )
 
 
-def _output_schema(name: str, first: int, last: int, reverse: bool) -> probatio.Schema:
-    """The output step's schema: name, 1-based inclusive pixel range and whether the controller reverses the output,
-    these defaults prefilled."""
+def _output_schema(name: str, first: int, last: int) -> probatio.Schema:
+    """The output step's schema: name and 1-based inclusive pixel range, these defaults prefilled."""
     return probatio.Schema(
         {
             probatio.Required(CONF_NAME, default=name): TextSelector(),
             probatio.Required(CONF_FIRST_PIXEL, default=first): PIXEL_SELECTOR,
             probatio.Required(CONF_LAST_PIXEL, default=last): PIXEL_SELECTOR,
-            probatio.Required(SEGMENT_REVERSED, default=reverse): BooleanSelector(),
         }
     )
 
@@ -164,8 +161,8 @@ async def _read_layout(host: str, controller_type: str, http_port: int) -> Contr
 def _layout_data(layout: ControllerLayout | None) -> dict[str, Any] | None:
     """Entry data for a usable layout (a drivable data type and active outputs), else ``None``.
 
-    Segment keys are the layout's segment names, so an output that stays keeps its entity's unique ID; an output the
-    controller reverses (``rev``) is marked reversed.
+    Segment keys are the layout's segment names, so an output that stays keeps its entity's unique ID. A port the
+    controller reverses (``rev``) needs nothing here: the controller applies it, so DDP order is the string's order.
     """
     if layout is None or layout.data_type is None or not layout.active_outputs:
         return None
@@ -175,7 +172,6 @@ def _layout_data(layout: ControllerLayout | None) -> dict[str, Any] | None:
             SEGMENT_NAME: f"Output {output.index + 1}",
             SEGMENT_START: segment.start,
             SEGMENT_LENGTH: segment.length,
-            SEGMENT_REVERSED: output.reversed_by_controller,
         }
         for output, segment in zip(layout.active_outputs, layout.segments(), strict=True)
     ]
@@ -265,8 +261,7 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
 
         A vendor type re-reads the layout and prefills the manual and output steps from it (data type, outputs), so
         switching the controller between 3- and 4-channel input takes effect; an output whose key is stored keeps its
-        stored name and reversed flag (an entry from before the flag takes the layout's), and the layout's device
-        info is stored.
+        stored name, and the layout's device info is stored.
         Generic DDP, or a type that gives no layout, prefills them from the stored data type and outputs.
         """
         entry = self._get_reconfigure_entry()
@@ -283,13 +278,10 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
             if layout is None:
                 self._prefill_from(entry.data[CONF_DATA_TYPE], entry.data[CONF_SEGMENTS])
             else:
-                # What the user set wins for a matching key: the name, and the reversed flag (unticked if the
-                # numbering came out backwards on the hardware); an entry from before the flag takes the layout's.
-                kept = {
-                    s[SEGMENT_KEY]: {k: s[k] for k in (SEGMENT_NAME, SEGMENT_REVERSED) if k in s}
-                    for s in entry.data[CONF_SEGMENTS]
-                }
-                segments = [{**s, **kept.get(s[SEGMENT_KEY], {})} for s in layout[CONF_SEGMENTS]]
+                names = {s[SEGMENT_KEY]: s[SEGMENT_NAME] for s in entry.data[CONF_SEGMENTS]}
+                segments = [
+                    {**s, SEGMENT_NAME: names.get(s[SEGMENT_KEY], s[SEGMENT_NAME])} for s in layout[CONF_SEGMENTS]
+                ]
                 self._prefill_from(layout[CONF_DATA_TYPE], segments)
                 self._device_info = _device_info(layout)
             return await self.async_step_manual()
@@ -330,6 +322,11 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
             number += 1
         return f"output{number}"
 
+    @staticmethod
+    def _stored_keys(entry: ConfigEntry) -> list[str]:
+        """The stored outputs' segment keys (their devices' identifiers end in them)."""
+        return [str(s[SEGMENT_KEY]) for s in entry.data[CONF_SEGMENTS]]
+
     async def _reconfigure(self, updates: dict[str, Any]) -> ConfigFlowResult | str:
         """Apply ``updates`` to the reconfigured entry and reload it, or the socket check's error key."""
         entry = self._get_reconfigure_entry()
@@ -339,9 +336,12 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
             return error
         if host != entry.data[CONF_HOST]:
             # Unique IDs of the entities are keyed by the entry, so only the devices' identities follow the host: the
-            # DDP device and, for a vendor controller type, the controller device.
+            # DDP device, the output devices and, for a vendor controller type, the controller device.
             registry = dr.async_get(self.hass)
-            for old, new in zip(device_identifiers(entry.data[CONF_HOST]), device_identifiers(host), strict=True):
+            old_host = entry.data[CONF_HOST]
+            moves = list(zip(device_identifiers(old_host), device_identifiers(host), strict=True))
+            moves += [(output_identifier(old_host, k), output_identifier(host, k)) for k in self._stored_keys(entry)]
+            for old, new in moves:
                 if device := registry.async_get_device_by_identifier(old, entry.entry_id):
                     registry.async_update_device(device.id, new_identifiers={new})
         # A color order of the old data type would stop the strip from building.
@@ -381,7 +381,6 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
                     SEGMENT_NAME: user_input[CONF_NAME].strip() or f"Output {index + 1}",
                     SEGMENT_START: first - 1,
                     SEGMENT_LENGTH: last - first + 1,
-                    SEGMENT_REVERSED: bool(user_input.get(SEGMENT_REVERSED, False)),
                 }
                 if index + 1 < self._outputs:
                     self._segments.append(segment)
@@ -414,22 +413,15 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
                             CONF_CONTROLLER_TYPE: self._controller_type,
                         },
                     )
-        defaults: tuple[str, int, int, bool]
         if user_input is not None:
-            defaults = (
-                user_input[CONF_NAME],
-                int(user_input[CONF_FIRST_PIXEL]),
-                int(user_input[CONF_LAST_PIXEL]),
-                bool(user_input.get(SEGMENT_REVERSED, False)),
-            )
+            defaults = (user_input[CONF_NAME], int(user_input[CONF_FIRST_PIXEL]), int(user_input[CONF_LAST_PIXEL]))
         elif index < len(self._prefill):
             stored = self._prefill[index]
             start = stored[SEGMENT_START]
-            reverse = bool(stored.get(SEGMENT_REVERSED, False))
-            defaults = (stored[SEGMENT_NAME], start + 1, start + stored[SEGMENT_LENGTH], reverse)
+            defaults = (stored[SEGMENT_NAME], start + 1, start + stored[SEGMENT_LENGTH])
         else:
             first = max((s[SEGMENT_START] + s[SEGMENT_LENGTH] for s in self._segments), default=0) + 1
-            defaults = (f"Output {index + 1}", first, first + DEFAULT_OUTPUT_LENGTH - 1, False)
+            defaults = (f"Output {index + 1}", first, first + DEFAULT_OUTPUT_LENGTH - 1)
         return self.async_show_form(
             step_id="output",
             data_schema=_output_schema(*defaults),

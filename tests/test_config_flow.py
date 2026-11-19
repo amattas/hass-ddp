@@ -109,8 +109,8 @@ async def test_discovered_controller_creates_entry(hass: HomeAssistant, flow_con
         "pixel_count": 122,
         "data_type": "rgb",
         "segments": [
-            {"key": "output1", "name": "Output 1", "start": 0, "length": 80, "reversed": False},
-            {"key": "output2", "name": "Output 2", "start": 80, "length": 42, "reversed": False},
+            {"key": "output1", "name": "Output 1", "start": 0, "length": 80},
+            {"key": "output2", "name": "Output 2", "start": 80, "length": 42},
         ],
         "manufacturer": "Minleon",
         "model": "NDB-Pro",
@@ -162,9 +162,8 @@ async def test_controller_type_is_preselected_and_overridable(
     assert result["step_id"] == "manual"
     assert result["data_schema"]({}) == {"data_type": "rgb", "outputs": 2}  # type: ignore[misc]
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-    # The fixture's HTTP layout reverses port 1 (``rev``); the DDP one reverses nothing.
-    rev = not ddp_layout
-    assert result["data_schema"]({}) == _output("Output 1", 1, 80, rev=rev)  # type: ignore[misc]
+    # The fixture's HTTP layout reverses port 1 (``rev``): the controller applies that itself, so it changes nothing.
+    assert result["data_schema"]({}) == _output("Output 1", 1, 80)  # type: ignore[misc]
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["data_schema"]({}) == _output("Output 2", 81, 122)  # type: ignore[misc]
     result = await hass.config_entries.flow.async_configure(result["flow_id"], second)
@@ -173,7 +172,7 @@ async def test_controller_type_is_preselected_and_overridable(
     assert result["data"]["model"] is not None
     assert result["data"]["controller_type"] == expected
     assert result["data"]["segments"] == [
-        _seg("output1", "Output 1", 0, 80, rev=rev),
+        _seg("output1", "Output 1", 0, 80),
         _seg("output2", "Output 2", 80, second_length),
     ]
     assert result["data"]["pixel_count"] == 80 + second_length
@@ -195,13 +194,13 @@ async def _walk_outputs(
     return result
 
 
-def _output(name: str, first: int, last: int, *, rev: bool = False) -> dict[str, Any]:
-    return {"name": name, "first_pixel": first, "last_pixel": last, "reversed": rev}
+def _output(name: str, first: int, last: int) -> dict[str, Any]:
+    return {"name": name, "first_pixel": first, "last_pixel": last}
 
 
-def _seg(key: str, name: str, start: int, length: int, *, rev: bool | None = False) -> dict[str, Any]:
-    """A segment as the flow stores it; ``rev=None`` leaves ``reversed`` out, as in an entry from before the flag."""
-    return {"key": key, "name": name, "start": start, "length": length, **({} if rev is None else {"reversed": rev})}
+def _seg(key: str, name: str, start: int, length: int, *, rev: bool = False) -> dict[str, Any]:
+    """A segment as the flow stores it; ``rev`` adds the ``reversed`` flag a 0.6.0 entry may have stored."""
+    return {"key": key, "name": name, "start": start, "length": length, **({"reversed": True} if rev else {})}
 
 
 @pytest.mark.parametrize(
@@ -209,13 +208,12 @@ def _seg(key: str, name: str, start: int, length: int, *, rev: bool | None = Fal
     [
         # One output, the form's defaults: pixels 1-50.
         (AsyncMock(return_value=None), "rgb", [{}], [_seg("output1", "Output 1", 0, 50)]),
-        # Two named outputs with a gap (101-150 undriven): the pixel count is the highest last pixel. The second is
-        # reversed by the controller, which only changes how its pixel lights count.
+        # Two named outputs with a gap (101-150 undriven): the pixel count is the highest last pixel.
         (
             AsyncMock(side_effect=DDPQueryError("garbled reply")),
             "rgbw",
-            [_output("Roof", 1, 100), _output("Garage", 151, 200, rev=True)],
-            [_seg("output1", "Roof", 0, 100), _seg("output2", "Garage", 150, 50, rev=True)],
+            [_output("Roof", 1, 100), _output("Garage", 151, 200)],
+            [_seg("output1", "Roof", 0, 100), _seg("output2", "Garage", 150, 50)],
         ),
         (
             AsyncMock(return_value=parse_config(MONO_CONFIG, host=HOST, source="ddp")),
@@ -403,10 +401,7 @@ async def test_reconfigure_changes_controller_type_and_reloads(
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
     assert entry.data["controller_type"] == target
-    # The stored segments have no flag (an entry from before the flag): the NDB-Pro's layout (the fixture) fills it, and
-    # reverses port 1; Generic DDP prefills from the stored segments. Either way the flag is now stored.
-    flags = (target == "ndbpro", False)
-    assert entry.data["segments"] == [{**segment, "reversed": rev} for segment, rev in zip(stored, flags, strict=True)]
+    assert entry.data["segments"] == stored  # the layout's port reverse (the fixture's rev) is the controller's own
     assert entry.state is ConfigEntryState.LOADED
     assert (entry.runtime_data.controller is not None) == (target == "ndbpro")
     assert _controller_entities(entity_registry, entry) == (CONTROLLER_ENTITIES if target == "ndbpro" else [])
@@ -457,7 +452,7 @@ async def test_reconfigure_changes_host_and_keeps_the_device(
     registry = dr.async_get(hass)
     devices = {
         suffix: registry.async_get_device_by_identifier((DOMAIN, f"{HOST}{suffix}"), entry.entry_id)
-        for suffix in ("", ":controller")
+        for suffix in ("", ":controller", ":output1", ":output2")
     }
     assert None not in devices.values()
     if other_entry:
@@ -485,7 +480,7 @@ async def test_reconfigure_changes_host_and_keeps_the_device(
         assert entry.data["host"] == ("127.0.0.2" if moved else HOST)
         assert entry.unique_id == ("127.0.0.2" if moved else HOST)
         assert entry.title == ("127.0.0.2" if moved and title == HOST else title)  # follows only an untouched title
-        # Both devices (the DDP device and the controller device) follow the host, keeping their IDs.
+        # Every device (the DDP device, the controller device, the output devices) follows the host, keeping its ID.
         for suffix, device in devices.items():
             new = registry.async_get_device_by_identifier((DOMAIN, f"127.0.0.2{suffix}"), entry.entry_id)
             old = registry.async_get_device_by_identifier((DOMAIN, f"{HOST}{suffix}"), entry.entry_id)
@@ -506,8 +501,7 @@ def _serve_config(controller: FakeController, conv: int, ports: list[tuple[int, 
 @pytest.mark.parametrize(
     ("conv", "ports", "data_type", "keys", "options", "kept_options", "stored_rev"),
     [
-        # Switched to a 4-channel input mode: output 2 moves to slot 321 (80 px x 4 channels), same two outputs. The
-        # entry predates the reversed flag, so the layout's fills it.
+        # Switched to a 4-channel input mode: output 2 moves to slot 321 (80 px x 4 channels), same two outputs.
         (
             2,
             [(80, 1), (42, 321)],
@@ -515,10 +509,10 @@ def _serve_config(controller: FakeController, conv: int, ports: list[tuple[int, 
             ["output1", "output2"],
             {"color_order": "GRB", "fps": 20},
             {"fps": 20},
-            None,
+            False,
         ),
-        # Output 2 dropped; the user had unticked Reversed on output 1, which a reconfigure keeps.
-        (13, [(80, 1)], "rgb", ["output1"], {"color_order": "GRB"}, {"color_order": "GRB"}, False),
+        # Output 2 dropped; output 1 has the Reversed flag of a 0.6.0 entry, which is dropped.
+        (13, [(80, 1)], "rgb", ["output1"], {"color_order": "GRB"}, {"color_order": "GRB"}, True),
     ],
     ids=["rgbw-drops-rgb-color-order", "output-dropped"],
 )
@@ -533,11 +527,10 @@ async def test_reconfigure_rereads_the_layout(
     keys: list[str],
     options: dict[str, Any],
     kept_options: dict[str, Any],
-    stored_rev: bool | None,
+    stored_rev: bool,
 ) -> None:
     flow_controller.offline = False
-    # Output 1 renamed by the user; its flag as stored (none, or unticked although the controller reverses it).
-    stored = [_seg("output1", "Roof", 0, 80, rev=stored_rev), _seg("output2", "Output 2", 80, 42)]
+    stored = [_seg("output1", "Roof", 0, 80, rev=stored_rev), _seg("output2", "Output 2", 80, 42)]  # Roof: renamed
     entry = entry_factory(controller=flow_controller, options=options, segments=stored)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
@@ -558,9 +551,7 @@ async def test_reconfigure_rereads_the_layout(
     assert result["step_id"] == "manual"
     assert result["data_schema"]({}) == {"data_type": data_type, "outputs": len(keys)}  # type: ignore[misc]
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-    # The fixture's layout reverses port 1. Like the name, a stored flag wins; a missing one takes the layout's.
-    rev = True if stored_rev is None else stored_rev
-    defaults = [_output("Roof", 1, 80, rev=rev), _output("Output 2", 81, 122)][: len(keys)]
+    defaults = [_output("Roof", 1, 80), _output("Output 2", 81, 122)][: len(keys)]
     for default in defaults[:-1]:
         assert result["data_schema"]({}) == default  # type: ignore[misc]
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
@@ -576,7 +567,7 @@ async def test_reconfigure_rereads_the_layout(
     assert result["reason"] == "reconfigure_successful"
     assert entry.state is ConfigEntryState.LOADED
     assert entry.data["data_type"] == data_type
-    assert entry.data["segments"] == [_seg("output1", "Roof", 0, 80, rev=rev), stored[1]][: len(keys)]
+    assert entry.data["segments"] == [_seg("output1", "Roof", 0, 80), stored[1]][: len(keys)]
     assert entry.data["pixel_count"] == (122 if len(keys) > 1 else 80)
     assert (entry.data["manufacturer"], entry.data["model"], entry.data["firmware"]) == ("3WL", "NDBPRO", "2.0")
     assert entry.options == kept_options
@@ -609,13 +600,17 @@ async def test_reconfigure_without_a_layout_prefills_the_stored_one(
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["data_schema"]({}) == _output("Output 1", 1, 80)  # type: ignore[misc]
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-    assert result["data_schema"]({}) == _output("Output 2", 81, 122, rev=True)  # type: ignore[misc]
+    assert result["data_schema"]({}) == _output("Output 2", 81, 122)  # type: ignore[misc]
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
-    assert dict(entry.data) == stored
+    # Unchanged, except that output 2's 0.6.0 Reversed flag is no longer written.
+    assert dict(entry.data) == {
+        **stored,
+        "segments": [_seg("output1", "Output 1", 0, 80), _seg("output2", "Output 2", 80, 42)],
+    }
     assert entry.options == {"color_order": "GRBW"}
     assert await hass.config_entries.async_unload(entry.entry_id)
 
@@ -703,4 +698,19 @@ async def test_reconfigure_generic_redefines_the_outputs(
     assert all(light(key) is None for key in gone)
     assert None not in [light(s["key"]) for s in expected]
     assert (light("strip") is not None) == (len(expected) > 1)
+    # With several outputs each output light is the main entity of its own device; with one it is on the DDP device.
+    # A device left empty (a dropped output, or a single output left) is removed.
+    devices = dr.async_get(hass)
+    ddp_device = devices.async_get_device_by_identifier((DOMAIN, HOST), entry.entry_id)
+    assert ddp_device is not None
+    for segment in expected:
+        output_device = devices.async_get_device_by_identifier((DOMAIN, f"{HOST}:{segment['key']}"), entry.entry_id)
+        assert (output_device is not None) == (len(expected) > 1)
+        on = entity_registry.async_get(light(segment["key"]))  # type: ignore[arg-type]
+        assert on is not None
+        assert on.device_id == (output_device or ddp_device).id
+    stale = [s["key"] for s in stored if s["key"] not in {e["key"] for e in expected} or len(expected) == 1]
+    assert [devices.async_get_device_by_identifier((DOMAIN, f"{HOST}:{key}"), entry.entry_id) for key in stale] == [
+        None
+    ] * len(stale)
     assert await hass.config_entries.async_unload(entry.entry_id)

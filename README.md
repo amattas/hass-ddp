@@ -26,7 +26,7 @@ for which controllers have been exercised.
 |---|---|
 | **Output N** light (one per output; a manually defined output has the name you gave it) | On/off, brightness, RGB color (RGBW color for an RGBW entry), the aioddp effects, and multi-color patterns (`ddp.set_pattern`). Sends DDP; its state is assumed. On a vendor controller, turning it on stops a running scene (the controller goes `Off`), and starting a scene turns it off |
 | **All outputs** light (only when the controller has more than one output) | The same as an output light, over the whole strip: a pattern or effect runs on across the outputs in one DDP frame |
-| **Output N Light 1** to **Light N** (with the **One light per pixel** option; one per pixel of every output) | One pixel each: on/off, brightness, and color (RGBW for an RGBW entry); no effects or patterns. Numbered along the installed string: Light 1 is the output's first pixel, or its last one on an output marked **Reversed**. Shares its pixel with its output light and All outputs (see below) |
+| **Output N Light 1** to **Light N** (with the **One light per pixel** option; one per pixel of every output) | One pixel each: on/off, brightness, and color (RGBW for an RGBW entry); no effects or patterns. Numbered in DDP order from the output's first pixel (a controller that reverses a port applies that itself, so this is the string's order). On the output's own device when there are several outputs, named "Light N". Shares its pixel with its output light and All outputs (see below) |
 | **Controller** light (vendor controller types only; the controller device's main entity, named like the device) | On while the controller runs a scene. On brings back the last scene (else the first), also after a restart; brightness is the controller's own intensity (1-100%), and turn_on with a brightness sets it. Off is the controller's `Off`; starting a scene turns the DDP lights off. Its `colors` and `background` attributes are the controller's palette (the colors its effects use), set with `ddp.set_colors`; `ddp.recall_preset` plays a stored preset. Polled |
 | **Color 1** to **Color 5** lights (controller device) | One palette slot each; off empties the slot. A Color tab for a custom color (brightness shows 255 and scales the color a turn_on sends) and a Temperature tab from 2700 K (the controller's Warm White) to 6500 K (its Cool White), in between a white mixed from RGB |
 | **Scene** select (controller device) | The controller's built-in effects and shows; the running one is selected, none while it is `Off`. Selecting one runs it and turns the DDP lights off |
@@ -37,10 +37,20 @@ and white, and white reaches the pixels' white LEDs. The default look is the whi
 Solid colors and `palette` patterns carry white; the animated effects use red, green, and blue only (see Known
 limitations).
 
-Devices: the output lights, All outputs and the pixel lights are on the DDP device, named after the entry. A vendor controller type adds
-a controller device named after the entry and the type (for example "Front Yard Minleon NDB-Pro"), connected through
-the DDP device, with the main light, Color 1 to 5, and Scene on it; the DDP device is then named after
-the entry and Generic DDP ("Front Yard Generic DDP").
+Devices: the lights are spread over devices, connected through the DDP device. With more than one output, each output has its own device, named
+after the entry and the output (for example "Front Yard Output 1"): the output light is its main entity (it takes the
+device's name) and the output's pixel lights are on it as "Light 1", "Light 2", and so on. All outputs stays on the
+DDP device, which is named after the entry. With a single output, its light and its pixel lights ("<output> Light N")
+are on the DDP device. A vendor controller type adds a controller device named after the entry and the type (for
+example "Front Yard Minleon NDB-Pro"), connected through the DDP device, with the main light, Color 1 to 5, and Scene
+on it; the DDP device is then named after the entry and Generic DDP ("Front Yard Generic DDP").
+
+A new output device starts in the DDP device's area, and if you renamed the DDP device (say "My Strip"), it is named
+after that name and the output ("My Strip Output 1"), so after upgrading from 0.6.0 the lights stay in their area and
+keep their names. Area and name you set on an output device later are kept, also when the output is removed and comes
+back. This happens once, when the output device is created: later changes to the DDP device's area or name are not
+followed, and if the output device got a name this way, renaming the output in Reconfigure does not change it
+(rename the device by hand).
 
 Actions: `ddp.set_pattern` (DDP lights: the outputs and All outputs, not the pixel lights), and `ddp.recall_preset` and `ddp.set_colors`
 (the NDB-Pro controller light only). Home Assistant's `light.turn_on` and `light.turn_off` work on every light, and scenes capture the segment lights.
@@ -98,7 +108,6 @@ pinned git commits (`aioddp` is not yet published to PyPI).
 | Pixel type | Add, Reconfigure | RGB (3 channels per pixel) or RGBW (4) |
 | Number of outputs | Add, Reconfigure | 1 to 16; one light each, not the pixel count |
 | Name, First pixel, Last pixel | Add, Reconfigure (once per output) | 1-based, inclusive; gaps allowed, overlaps refused |
-| Reversed | Add, Reconfigure (once per output) | The controller reverses this output, so its pixel lights count from the other end (Light 1 is the range's last pixel). Changes nothing DDP sends. Prefilled from the controller's layout (the NDB-Pro's per-port reverse setting); a reconfigure keeps what you stored. Set it by hand on a Generic DDP controller |
 
 DDP is send-only UDP with no acknowledgement, so setup can only check that a socket opens. Setup never sends a frame,
 and reloading or removing the integration never blanks the lights.
@@ -119,7 +128,7 @@ in the controller type registry (`custom_components/ddp/controller.py`) backed b
 and re-reads the output layout the same way adding does (a DDP query, then the controller type's own API). The form
 shows the stored pixel type and the layout the controller reports now. Submitting always continues to the same pixel
 type, outputs, and per-output steps as adding. When the controller reports a layout they are prefilled from it (its
-pixel type, outputs and ranges, keeping the names and Reversed flags you gave the outputs), and its device info is stored; so after
+pixel type, outputs and ranges, keeping the names you gave the outputs), and its device info is stored; so after
 switching an NDB-Pro between a 3-channel and a 4-channel input mode, reconfigure the entry to follow it. For
 **Generic DDP**, or when the controller reports no layout, they are prefilled with the stored outputs. Change the
 ranges, add or remove outputs: outputs that are still there keep their lights; an output that is gone loses its light
@@ -413,10 +422,9 @@ Wi-Fi name are redacted.
   the controller's saved settings.
 - **Segment light state is assumed.** Changes made elsewhere (another sender) are not seen; the controller's own scene
   starting or stopping is, at the next 30 s poll.
-- **Pixel light numbering on a reversed port is not verified on hardware.** On an output marked Reversed, Light 1 is
-  the output's last DDP pixel, assuming the controller's reverse puts that pixel at the start of the string. If Light 1
-  lights the far end, untick **Reversed** for that output (Reconfigure); the lights keep their entity IDs, and later
-  reconfigures keep your choice (only an entry from before the flag takes it from the controller's layout).
+- **Pixel lights follow DDP order.** Light 1 is the output's first DDP pixel. The NDB-Pro applies its own port
+  reverse setting, so that is the string's order; a controller that does not would number a reversed string from
+  the far end.
 - **No DDP pixels over a running scene.** The controller cannot report its scenes' pixels, so a scene and the DDP
   lights are exclusive: turning a DDP light on stops the scene, starting a scene turns the DDP lights off.
 - **After a scene starts, the last DDP frame may linger.** HA stops sending at once; the NDB-Pro shows its scene again
