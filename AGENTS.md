@@ -42,7 +42,7 @@ one registry entry). See `DECISIONS.md`.
   offered) -> for every type the manual steps (prefilled from the detected layout if any, keeping its title and
   device info): pixel type + number of outputs, then one `output` step per output (name, 1-based first/last pixel;
   gaps allowed, overlaps refused; pixel count = highest last pixel; a prefilled output keeps its segment key; a
-  "Reversed" box, stored as `reversed: true` only when set, prefilled from the layout's `rev`);
+  "Reversed" box, always stored, prefilled from the layout's `rev`; a layout reconfigure keeps a stored flag per key);
   reconfigure changes host/type, re-reads the layout for a vendor type, and walks the same manual/output steps,
   prefilled from the read layout (stored names kept per key, its device info stored) or else the stored segments;
   options flow (cap, color order, fps, keepalive, `pixel_lights`)
@@ -52,7 +52,7 @@ one registry entry). See `DECISIONS.md`.
   that share pixels hand them to each other without sending); `PaletteLight` "Color 1".."Color 5", one palette slot
   each: RGB, or color temperature (2700 K warm, 6500 K cool) while it holds a white. `PixelLight` (option
   `pixel_lights`): one per pixel of every output, "<output> Light N" in physical order (a `reversed` output counts
-  from its last DDP pixel), unique ID `<segment key>_pixel<N>`, no effects or patterns; it leaves a solid output on
+  from its last DDP pixel), unique ID `<segment key>_pixel<N>`, no effects or patterns; it never turns its output off (freezes an effect)
   (DECISIONS.md 2026-11-18). Overlap lists are computed once at setup (`link`). Setup removes any light of the entry
   it did not create
 - `light.py` also has `ControllerLight`, the controller device's main entity (no name; brightness = intensity): on = a scene runs, off = the controller's

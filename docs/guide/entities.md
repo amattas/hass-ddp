@@ -26,12 +26,13 @@ to All outputs. Nothing is blanked: the newly turned-on light simply draws over 
 outputs had lit keeps that frame until something else sends to it.
 
 **Pixel lights share their pixel** with their output light and All outputs, and the last write wins per pixel.
-Coloring a pixel light changes only that pixel: an output (or All outputs) showing a solid color stays on and keeps
-lighting its other pixels, while one running an effect or a pattern stops (it would paint over the pixel) and shows
-off. Turning the output light on again, or giving it a color or an effect, repaints all its pixels, and the pixel
-lights on it show off. Turning the output light off blanks its pixels, so its pixel lights go off too. Turning a pixel
-light off sends black for that pixel only; while a controller scene runs, it is held black and a bare turn_on hands
-the pixel back to the scene, as for an output.
+Coloring a pixel light changes only that pixel, and its output (and All outputs) stays on, lighting its other pixels:
+a solid color stays, a controller scene keeps showing, and an effect or pattern stops on its last frame (it would
+paint over the pixel), shown with effect off. Turning the output light on again, or giving it a color or an effect,
+repaints all its pixels, and the pixel lights on it show off. Turning the output light off blanks all its pixels, so
+its pixel lights go off too (during a scene, held black like the output). Turning a pixel light off sends black for
+that pixel only; while a controller scene runs, it is held black and a bare turn_on hands the pixel back to the
+scene, as for an output.
 
 ## RGBW
 

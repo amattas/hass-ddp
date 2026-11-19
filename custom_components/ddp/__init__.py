@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from bisect import insort
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -135,17 +136,23 @@ class DDPRuntime:
             return
         channels = self.sender.strip.channels
         held = [Segment(_HELD, offset // channels, length // channels) for offset, length in self.sender.held]
-        keep = [light.segment for light in holding]
+        keep = sorted((light.segment for light in holding), key=_start)
         for segment in held:
             for start, end in _uncovered(segment, keep):
                 self.sender.release(Segment(_HELD, start, end - start))
-        covered = [*held, *(light.segment for light in holding if light.source is LightSource.DDP)]
+        covered = sorted([*held, *(light.segment for light in holding if light.source is LightSource.DDP)], key=_start)
         for light in holding:
             if light.source is LightSource.DDP:
                 continue
             for start, end in _uncovered(light.segment, covered):
                 await self.sender.off(Segment(_HELD, start, end - start))
-            covered.append(light.segment)
+            insort(covered, light.segment, key=_start)
+
+    def sent(self, segment: Segment) -> bool:
+        """The sender holds every pixel of ``segment``: a frame reached them (and keepalive resends it)."""
+        strip = self.sender.strip
+        start, end = strip.byte_offset(segment), strip.byte_offset(segment) + strip.byte_length(segment)
+        return any(offset <= start and end <= offset + length for offset, length in self.sender.held)
 
     async def stop_runner(self, key: str) -> None:
         """Stop and forget the runner for ``key``, if any. Never blanks the segment."""
@@ -157,10 +164,14 @@ class DDPRuntime:
 type DDPConfigEntry = ConfigEntry[DDPRuntime]
 
 
+def _start(segment: Segment) -> int:
+    return segment.start
+
+
 def _uncovered(segment: Segment, cover: list[Segment]) -> list[tuple[int, int]]:
-    """The ``(start, end)`` pixel runs of ``segment`` that no segment in ``cover`` covers."""
+    """The ``(start, end)`` pixel runs of ``segment`` that no segment in ``cover`` (sorted by start) covers."""
     runs, position = [], segment.start
-    for other in sorted(cover, key=lambda s: s.start):
+    for other in cover:
         if other.start > position:
             runs.append((position, min(other.start, segment.end)))
         position = max(position, other.end)

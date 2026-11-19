@@ -206,25 +206,32 @@ the controller's 6-slot color palette (`/pcolors.html`, with Cool White / Warm W
 - Pixel lights are DDP lights over a one-pixel segment (`PixelLight`, a `DDPSegmentLight`), so they share the
   source, hand-off, hold, keepalive and restore machinery: on/off, brightness, RGB or RGBW color. No effects, and
   `ddp.set_pattern` on one is refused (`pixel_light_pattern`; `not_a_ddp_light` would read wrong, it is a DDP light).
-- Physical order: Light N is the N-th pixel along the installed string. Each stored segment may carry
-  `reversed: true` (stored only when true; absent means false, so existing entries load unchanged, no migration):
-  then Light N is DDP pixel `start + length - N`, else `start + N - 1`. What DDP sends is unchanged. The flow prefills
-  it from the layout (`OutputInfo.reversed_by_controller`, the NDB-Pro's per-port `rev`) and the output step has a
-  "Reversed" box (Generic DDP users set it by hand). Reconfigure prefilled from a layout takes the layout's flag (like
-  the range; only the name is kept from the entry); prefilled from the stored segments it keeps the stored flag.
+- Physical order: Light N is the N-th pixel along the installed string. Each segment stores `reversed` (the flow
+  always writes it; an entry from before has none, read as false, so it loads unchanged with no migration): when true
+  Light N is DDP pixel `start + length - N`, else `start + N - 1`. What DDP sends is unchanged. The flow prefills it
+  from the layout (`OutputInfo.reversed_by_controller`, the NDB-Pro's per-port `rev`) and the output step has a
+  "Reversed" box (Generic DDP users set it by hand). Reconfigure keeps the stored flag of a matching key, like its
+  name, so a user who unticked it after a hardware test keeps that; a key with no stored flag (an entry from before
+  it) or a new output takes the layout's. Prefilled from the stored segments, the stored flag is kept.
 - Unique IDs are `<entry>_<segment key>_pixel<N>` with N the physical number, so flipping the flag keeps the
   entities (they map to the other end). Not verified on hardware: whether the NDB-Pro's `rev` puts DDP pixel
   `start + length - 1` at the string's start. If Light 1 lights the far end, the user unticks Reversed; the README
   says so.
-- Interaction rule (ownership, generalized): last write wins per pixel. A pixel light taking its pixel hands back
-  the overlapping lights as an output does, except a solid `ddp` one (no effect or pattern, so nothing repaints the
-  pixel): its other pixels still show its color, so it stays on. An effect or pattern would overwrite the pixel on its
-  next frame, so that light's runner stops and it shows off (sending nothing), as today. Repainting an output (any
-  turn_on) takes its pixels from its pixel lights (they show off, as All outputs does to an output today). Turning a
-  light off over DDP now also shows the `ddp` lights inside it off, since its black covers their pixels (before, an
-  output inside All outputs could never be `ddp` while All outputs was, so nothing changes for them). Why not the plain
-  rule: an output that showed off after one of its pixels changed, while still lighting 41 pixels, could not be
-  turned off without turning it on first.
+- Interaction rule (ownership, generalized): last write wins per pixel. A pixel light taking its pixel turns no
+  overlapping light off: its output and All outputs keep lighting their other pixels and stay on, whatever they show.
+  A solid color stays; a light showing the controller's scene stays `scene` (the pixel is overridden over DDP and
+  held by keepalive); one running an effect or pattern has its runner stopped (it would repaint the pixel) and stays
+  `ddp` on its last frame, frozen, with effect off and no pattern, so it is solid for later hand-offs
+  (`DDPSegmentLight.async_freeze`). A runner stopped before its first frame (the pixel light and an effect turned on
+  at once) left nothing to freeze, and nothing held its pixels; then the light sends its solid color instead
+  (`DDPRuntime.sent` checks the held ranges). Repainting an output (any turn_on) takes its pixels from its pixel lights (they
+  show off, as All outputs does to an output). Turning a light off blanks all its pixels, the pixel lights' included:
+  over a running scene they are blanked with it (held black), otherwise the `ddp` lights inside it show off, since
+  its black covers them (before, an output inside All outputs could never be `ddp` while All outputs was, so nothing
+  changes for them). Why not the plain rule: an output that showed off after one of its pixels changed, while still
+  lighting its other pixels, could not be turned off without turning it on first (turn_off of an off light sends
+  nothing). The first cut kept only a solid output on; a verifier found the scene and effect cases left the output
+  showing off with lit pixels, so all three now stay on.
 - Blanking generalized from All outputs: a light with lights inside it (All outputs over the outputs and pixels, an
   output over its pixel lights) is blanked only while one of them still is, and does not hold its black itself; the
   lights inside hold theirs. So un-blanking one pixel during a scene releases just that pixel.

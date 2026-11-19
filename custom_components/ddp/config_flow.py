@@ -112,11 +112,6 @@ def _output_schema(name: str, first: int, last: int, reverse: bool) -> probatio.
     )
 
 
-def _reversed(reverse: bool) -> dict[str, bool]:
-    """The segment's ``reversed`` entry: stored only when set, so an unreversed output keeps the old shape."""
-    return {SEGMENT_REVERSED: True} if reverse else {}
-
-
 def _range_error(first: int, last: int, segments: list[dict[str, Any]]) -> str | None:
     """Error key for a 1-based inclusive range, or ``None``; gaps between outputs are fine, overlaps are not."""
     if last < first:
@@ -180,7 +175,7 @@ def _layout_data(layout: ControllerLayout | None) -> dict[str, Any] | None:
             SEGMENT_NAME: f"Output {output.index + 1}",
             SEGMENT_START: segment.start,
             SEGMENT_LENGTH: segment.length,
-            **_reversed(output.reversed_by_controller),
+            SEGMENT_REVERSED: output.reversed_by_controller,
         }
         for output, segment in zip(layout.active_outputs, layout.segments(), strict=True)
     ]
@@ -270,7 +265,8 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
 
         A vendor type re-reads the layout and prefills the manual and output steps from it (data type, outputs), so
         switching the controller between 3- and 4-channel input takes effect; an output whose key is stored keeps its
-        stored name (its reversed flag is the layout's, like its range), and the layout's device info is stored.
+        stored name and reversed flag (an entry from before the flag takes the layout's), and the layout's device
+        info is stored.
         Generic DDP, or a type that gives no layout, prefills them from the stored data type and outputs.
         """
         entry = self._get_reconfigure_entry()
@@ -287,10 +283,13 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
             if layout is None:
                 self._prefill_from(entry.data[CONF_DATA_TYPE], entry.data[CONF_SEGMENTS])
             else:
-                names = {s[SEGMENT_KEY]: s[SEGMENT_NAME] for s in entry.data[CONF_SEGMENTS]}
-                segments = [
-                    {**s, SEGMENT_NAME: names.get(s[SEGMENT_KEY], s[SEGMENT_NAME])} for s in layout[CONF_SEGMENTS]
-                ]
+                # What the user set wins for a matching key: the name, and the reversed flag (unticked if the
+                # numbering came out backwards on the hardware); an entry from before the flag takes the layout's.
+                kept = {
+                    s[SEGMENT_KEY]: {k: s[k] for k in (SEGMENT_NAME, SEGMENT_REVERSED) if k in s}
+                    for s in entry.data[CONF_SEGMENTS]
+                }
+                segments = [{**s, **kept.get(s[SEGMENT_KEY], {})} for s in layout[CONF_SEGMENTS]]
                 self._prefill_from(layout[CONF_DATA_TYPE], segments)
                 self._device_info = _device_info(layout)
             return await self.async_step_manual()
@@ -382,7 +381,7 @@ class DDPConfigFlow(ConfigFlow, domain=DOMAIN):
                     SEGMENT_NAME: user_input[CONF_NAME].strip() or f"Output {index + 1}",
                     SEGMENT_START: first - 1,
                     SEGMENT_LENGTH: last - first + 1,
-                    **_reversed(bool(user_input.get(SEGMENT_REVERSED, False))),
+                    SEGMENT_REVERSED: bool(user_input.get(SEGMENT_REVERSED, False)),
                 }
                 if index + 1 < self._outputs:
                     self._segments.append(segment)

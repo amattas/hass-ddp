@@ -52,12 +52,13 @@ to All outputs. Nothing is blanked: the newly turned-on light simply draws over 
 outputs had lit keeps that frame until something else sends to it.
 
 **Pixel lights share their pixel** with their output light and All outputs, and the last write wins per pixel.
-Coloring a pixel light changes only that pixel: an output (or All outputs) showing a solid color stays on and keeps
-lighting its other pixels, while one running an effect or a pattern stops (it would paint over the pixel) and shows
-off. Turning the output light on again, or giving it a color or an effect, repaints all its pixels, and the pixel
-lights on it show off. Turning the output light off blanks its pixels, so its pixel lights go off too. Turning a pixel
-light off sends black for that pixel only; while a controller scene runs, it is held black and a bare turn_on hands
-the pixel back to the scene, as for an output.
+Coloring a pixel light changes only that pixel, and its output (and All outputs) stays on, lighting its other pixels:
+a solid color stays, a controller scene keeps showing, and an effect or pattern stops on its last frame (it would
+paint over the pixel), shown with effect off. Turning the output light on again, or giving it a color or an effect,
+repaints all its pixels, and the pixel lights on it show off. Turning the output light off blanks all its pixels, so
+its pixel lights go off too (during a scene, held black like the output). Turning a pixel light off sends black for
+that pixel only; while a controller scene runs, it is held black and a bare turn_on hands the pixel back to the
+scene, as for an output.
 
 ## Installation
 
@@ -99,7 +100,7 @@ pinned git commits (`aioddp` is not yet published to PyPI).
 | Pixel type | Add, Reconfigure | RGB (3 channels per pixel) or RGBW (4) |
 | Number of outputs | Add, Reconfigure | 1 to 16; one light each, not the pixel count |
 | Name, First pixel, Last pixel | Add, Reconfigure (once per output) | 1-based, inclusive; gaps allowed, overlaps refused |
-| Reversed | Add, Reconfigure (once per output) | The controller reverses this output, so its pixel lights count from the other end (Light 1 is the range's last pixel). Changes nothing DDP sends. Prefilled from the controller's layout (the NDB-Pro's per-port reverse setting); set it by hand on a Generic DDP controller |
+| Reversed | Add, Reconfigure (once per output) | The controller reverses this output, so its pixel lights count from the other end (Light 1 is the range's last pixel). Changes nothing DDP sends. Prefilled from the controller's layout (the NDB-Pro's per-port reverse setting); a reconfigure keeps what you stored. Set it by hand on a Generic DDP controller |
 
 DDP is send-only UDP with no acknowledgement, so setup can only check that a socket opens. Setup never sends a frame,
 and reloading or removing the integration never blanks the lights.
@@ -120,7 +121,7 @@ in the controller type registry (`custom_components/ddp/controller.py`) backed b
 and re-reads the output layout the same way adding does (a DDP query, then the controller type's own API). The form
 shows the stored pixel type and the layout the controller reports now. Submitting always continues to the same pixel
 type, outputs, and per-output steps as adding. When the controller reports a layout they are prefilled from it (its
-pixel type, outputs, ranges and reversed ports, keeping the names you gave the outputs), and its device info is stored; so after
+pixel type, outputs and ranges, keeping the names and Reversed flags you gave the outputs), and its device info is stored; so after
 switching an NDB-Pro between a 3-channel and a 4-channel input mode, reconfigure the entry to follow it. For
 **Generic DDP**, or when the controller reports no layout, they are prefilled with the stored outputs. Change the
 ranges, add or remove outputs: outputs that are still there keep their lights; an output that is gone loses its light
@@ -424,7 +425,8 @@ Wi-Fi name are redacted.
   starting or stopping is, at the next 30 s poll.
 - **Pixel light numbering on a reversed port is not verified on hardware.** On an output marked Reversed, Light 1 is
   the output's last DDP pixel, assuming the controller's reverse puts that pixel at the start of the string. If Light 1
-  lights the far end, untick **Reversed** for that output (Reconfigure); the lights keep their entity IDs.
+  lights the far end, untick **Reversed** for that output (Reconfigure); the lights keep their entity IDs, and later
+  reconfigures keep your choice (only an entry from before the flag takes it from the controller's layout).
 - **Per-output disable during a scene is not verified on hardware.** If the NDB-Pro stops its effect on every output
   while DDP writes to one, disabling one output freezes the scene on the others.
 - **Setup cannot verify the controller over DDP.** It only checks that a UDP socket opens; a wrong host looks fine

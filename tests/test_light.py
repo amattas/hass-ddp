@@ -561,6 +561,7 @@ async def test_turn_off_of_an_off_light_leaves_the_pixels_of_an_overlapping_ligh
     assert [p.data for p in udp_listener.packets if p.offset == 0][-1] == red
 
 
+@pytest.mark.parametrize("taker", ["output_1", "output_1_light_1"], ids=["output", "pixel-light"])
 @pytest.mark.parametrize("vendor", [False, True], ids=["generic", "vendor"])
 async def test_concurrent_take_holds_black_for_the_off_outputs(
     hass: HomeAssistant,
@@ -568,18 +569,23 @@ async def test_concurrent_take_holds_black_for_the_off_outputs(
     fake_controller: FakeController,
     entry_factory: Callable[..., MockConfigEntry],
     vendor: bool,
+    taker: str,
 ) -> None:
     # All outputs' chase is stopped (Output 1 takes its pixels) before its first frame: its range was never sent, so
-    # the off Output 2 must still get black and stay held.
-    entry = entry_factory(controller=fake_controller if vendor else None)
+    # the off Output 2 must still get black and stay held. A pixel light freezes the chase instead, leaving All outputs
+    # on: with no frame to freeze, All outputs sends its color, held.
+    entry = entry_factory(controller=fake_controller if vendor else None, options={"pixel_lights": True})
     await _setup(hass, entry)
     prefix = "light.ndb_pro_generic_ddp_" if vendor else "light.ndb_pro_"
-    out1, all_outputs = f"{prefix}output_1", f"{prefix}all_outputs"
+    all_outputs = f"{prefix}all_outputs"
 
-    await asyncio.gather(_turn_on(hass, all_outputs, effect="chase"), _turn_on(hass, out1, rgb_color=RED))
+    await asyncio.gather(_turn_on(hass, all_outputs, effect="chase"), _turn_on(hass, prefix + taker, rgb_color=RED))
     await udp_listener.settle()
 
     assert_holds_follow_lights(entry.runtime_data)
+    if taker != "output_1":
+        assert hass.states.get(all_outputs).state == STATE_ON  # type: ignore[union-attr]
+        assert entry.runtime_data.sender.held == ((0, 122 * 3),)
     assert await hass.config_entries.async_unload(entry.entry_id)
 
 
@@ -647,16 +653,13 @@ async def test_pixel_light_lights_its_physical_pixel(
 
 
 @pytest.mark.parametrize(
-    ("look", "output_after"),
-    [({"rgb_color": BLUE}, STATE_ON), ({"effect": "chase"}, STATE_OFF)],
-    ids=["solid-output-stays-on", "effect-output-hands-over"],
+    "look", [{"rgb_color": BLUE}, {"effect": "chase"}, {"effect": "palette"}], ids=["solid", "effect", "pattern"]
 )
 async def test_a_pixel_light_and_its_output_share_the_pixel(
     hass: HomeAssistant,
     udp_listener: Listener,
     entry_factory: Callable[..., MockConfigEntry],
     look: dict[str, Any],
-    output_after: str,
 ) -> None:
     entry = entry_factory(options=PIXEL_OPTIONS)
     await _setup(hass, entry)
@@ -671,36 +674,37 @@ async def test_a_pixel_light_and_its_output_share_the_pixel(
     await udp_listener.settle()
     udp_listener.packets.clear()
 
-    # Last write wins per pixel: only that pixel's bytes change. A solid output keeps lighting its other pixels and
-    # stays on; an effect would repaint the pixel, so its runner stops and the output shows off (sending nothing).
+    # Last write wins per pixel: only that pixel's bytes change, and the output stays on, lighting its other pixels.
+    # An effect or pattern would repaint the pixel, so its runner stops: the output shows its last frame, frozen.
     await _turn_on(hass, pixel, rgb_color=RED)
     await udp_listener.settle()
-    sent = [(p.offset, p.data) for p in udp_listener.packets]
-    assert sent[-1] == red
-    if output_after == STATE_ON:
-        assert sent == [red]
-    assert "output2" not in runtime.runners
-    assert states() == [output_after, STATE_ON, STATE_OFF]
+    assert [(p.offset, p.data) for p in udp_listener.packets][-1] == red
+    assert "output2" not in runtime.runners and _effect_tasks() == []
+    udp_listener.packets.clear()
+    await udp_listener.settle()
+    assert udp_listener.packets == []
+    assert states() == [STATE_ON, STATE_ON, STATE_OFF]
+    assert hass.states.get(OUT2).attributes[ATTR_EFFECT] == EFFECT_OFF  # type: ignore[union-attr]
     assert_holds_follow_lights(runtime)
 
-    # The output repaints its pixels: the pixel light shows off without sending.
+    # Turning the output off blanks all its pixels, the pixel light's too.
+    await _turn_off(hass, OUT2)
+    await udp_listener.settle()
+    assert [(p.offset, p.data) for p in udp_listener.packets] == [(OUT2_OFFSET, bytes(42 * 3))]
+    assert states() == [STATE_OFF, STATE_OFF, STATE_OFF]
+
+    # The output repaints its pixels: the pixel light on it shows off without sending.
+    await _turn_on(hass, OUT2, rgb_color=GREEN)
+    await _turn_on(hass, pixel, rgb_color=RED)
+    assert states() == [STATE_ON, STATE_ON, STATE_OFF]
+    await udp_listener.settle()
     udp_listener.packets.clear()
-    await _turn_on(hass, OUT2, rgb_color=GREEN, effect=EFFECT_OFF)
+    await _turn_on(hass, OUT2, rgb_color=GREEN)
     await udp_listener.settle()
     assert [(p.offset, p.data) for p in udp_listener.packets] == [
         (OUT2_OFFSET, process_frame(bytes(GREEN) * 42, strip))
     ]
     assert states() == [STATE_ON, STATE_OFF, STATE_OFF]
-
-    # Turning the output off blanks its pixels, so a pixel light on over it goes off too.
-    await _turn_on(hass, pixel, rgb_color=RED)
-    assert states() == [STATE_ON, STATE_ON, STATE_OFF]
-    await udp_listener.settle()
-    udp_listener.packets.clear()
-    await _turn_off(hass, OUT2)
-    await udp_listener.settle()
-    assert [(p.offset, p.data) for p in udp_listener.packets] == [(OUT2_OFFSET, bytes(42 * 3))]
-    assert states() == [STATE_OFF, STATE_OFF, STATE_OFF]
     assert_holds_follow_lights(runtime)
     assert await hass.config_entries.async_unload(entry.entry_id)
 

@@ -17,10 +17,11 @@ turn_on with a brightness, color or effect takes it to ``ddp``.
 Ownership: lights whose pixels overlap (All outputs, each output, each pixel light) take the pixels from each other.
 Turning one on over DDP stops the overlapping lights' runners and shows the ``ddp`` and ``scene`` ones off without
 sending anything; the pixels then show only the light that was turned on, where it covers them. One exception: a pixel
-light leaves a solid ``ddp`` light (no effect, so nothing repaints the pixel) on, lighting its other pixels; last write
-wins per pixel. Turning a light off over DDP blanks its pixels, so the ``ddp`` lights inside it go off with it. A light
-with lights inside it (All outputs over the outputs, an output over its pixel lights) is blanked only while one of them
-still is, and holds its black through theirs. Which pixels the sender keeps resending follows the lights' state
+light turns nothing off. Its output and All outputs stay on, lighting their other pixels (a scene keeps showing; an
+effect or pattern stops, its last frame frozen, effect off); last write wins per pixel. Turning a light off blanks
+all its pixels, so the lights inside it go off (or blanked) with it. A light with lights inside it (All outputs over
+the outputs, an output over its pixel lights) is blanked only while one of them still is, and holds its black through
+theirs. Which pixels the sender keeps resending follows the lights' state
 (``DDPRuntime.sync_holds``, after every change).
 
 The controller device's main light and Scene select run the controller's built-in effects and stored presets; DDP
@@ -617,6 +618,20 @@ class DDPSegmentLight(DDPEntity, LightEntity, RestoreEntity):
             self._source = LightSource.OFF
         self.async_write_ha_state()
 
+    async def async_freeze(self) -> None:
+        """A pixel light took one of this light's pixels: if DDP drives an effect or pattern, stop its runner and keep
+        showing the last frame (still ``ddp``, now solid-like: effect off, no pattern). Sends nothing, unless the
+        runner stopped before its first frame: then nothing shows there, so this light's color is sent."""
+        runtime = self._runtime
+        async with self._lock:
+            if self._source is not LightSource.DDP or self.solid:
+                return
+            await runtime.stop_runner(self._config.key)
+            self._attr_effect, self._pattern = EFFECT_OFF, None
+            if not runtime.sent(self.segment):
+                await self._send_on()
+        self.async_write_ha_state()
+
     async def async_follow_scene(self, source: LightSource, sources: Container[LightSource]) -> bool:
         """Show ``source`` if this light's is one of ``sources``, stopping any runner and sending nothing.
 
@@ -698,10 +713,11 @@ class PixelLight(DDPSegmentLight):
         self._attr_translation_placeholders = {"output": output.name or output.key, "number": str(number)}
 
     async def _take_pixels(self) -> None:
-        """Hand back the overlapping lights, except a solid ``ddp`` one: it keeps lighting its other pixels."""
+        """Take this pixel over the overlapping lights without turning them off: they keep lighting their other pixels
+        (a scene keeps showing, a solid color stays). One running an effect or pattern is frozen, since its runner
+        would repaint the pixel."""
         for light in self._overlapping():
-            if not light.solid:
-                await light.async_hand_back()
+            await light.async_freeze()
 
     async def async_set_pattern(
         self,

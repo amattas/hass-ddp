@@ -23,7 +23,8 @@ SEGMENT_KEY: Final = "key"
 SEGMENT_NAME: Final = "name"
 SEGMENT_START: Final = "start"
 SEGMENT_LENGTH: Final = "length"
-# Optional, stored only when true: the controller reverses this output, so its pixel lights count from its last pixel.
+# The controller reverses this output, so its pixel lights count from its last pixel. The flow always stores it;
+# entries from before it have none (read as false; a reconfigure from the layout fills it).
 SEGMENT_REVERSED: Final = "reversed"
 
 DATA_TYPE_RGB: Final = "rgb"

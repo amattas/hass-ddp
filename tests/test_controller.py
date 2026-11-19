@@ -754,7 +754,7 @@ async def test_all_outputs_turned_off_during_a_scene_blanks_the_strip(
     assert await _keepalive_ranges(udp_listener) == set()
 
 
-async def test_a_pixel_light_unblanked_during_a_scene_releases_its_pixel_only(
+async def test_a_pixel_light_during_a_scene(
     hass: HomeAssistant,
     udp_listener: Listener,
     fake_controller: FakeController,
@@ -765,9 +765,16 @@ async def test_a_pixel_light_unblanked_during_a_scene_releases_its_pixel_only(
     await _turn_on_scene(hass)
     pixel = f"{OUT2}_light_1"  # DDP pixel 80
 
-    # Output 2 off during the scene: black held on its pixels, and its pixel lights are blanked with it.
+    # A pixel colored over the scene: DDP holds that pixel only; Output 2 and All outputs keep showing the scene.
+    await _call(hass, SERVICE_TURN_ON, pixel, rgb_color=(255, 0, 0))
+    assert [_state(hass, e).state for e in (OUT2, pixel, ALL)] == [STATE_ON] * 3
+    assert await _keepalive_ranges(udp_listener) == {(OUT2_OFFSET, 3)}
+
+    # Output 2 off during the scene: black held on all its pixels, and its pixel lights are blanked with it.
     await _call(hass, SERVICE_TURN_OFF, OUT2)
     assert [_state(hass, e).state for e in (OUT2, pixel)] == [STATE_OFF, STATE_OFF]
+    assert await _keepalive_ranges(udp_listener) == {(OUT2_OFFSET, 42 * 3)}
+    assert all(p.data == bytes(len(p.data)) for p in udp_listener.packets)
     # One pixel back to the scene: only that pixel is released; the output stays off while a pixel is still blanked.
     await _call(hass, SERVICE_TURN_ON, pixel)
     assert [_state(hass, e).state for e in (OUT2, pixel)] == [STATE_OFF, STATE_ON]

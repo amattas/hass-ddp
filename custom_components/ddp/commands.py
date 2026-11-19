@@ -186,7 +186,8 @@ class ControllerCommands:
             sources, target = (LightSource.SCENE, LightSource.BLANKED), LightSource.OFF
         elif before is None or before == state.effect:
             # Decided before any light changes: one light showing the scene would make the others stop holding.
-            lights = [light for light in lights if light.source is LightSource.OFF and not light.holding]
+            off_lights_hold = runtime.off_lights_hold
+            lights = [light for light in lights if light.source is LightSource.OFF and not light.holds(off_lights_hold)]
         async with runtime.ownership:
             for light in lights:
                 await light.async_follow_scene(target, sources)
