@@ -283,8 +283,8 @@ Superseded by 2026-11-19 (scene mode and DDP mode are exclusive).
   DDP-driven segments"), and in 2026-11-18 the scene cases of the interaction rule (a light showing the scene stays
   `scene`; blanking over a running scene; the generalized blanked-source paragraph).
 - Implementation notes (2026-11-19, after a verifier refuted the first cut): the DDP lights keep their own model of
-  the controller, `DDPRuntime.scene_mode` (scene / DDP / unknown), changed only under `ownership` by setup's read,
-  every poll, and the controller commands. A scene command the controller took counts as a running scene even if the
+  the controller, `DDPRuntime.scene_mode` (scene / DDP / unknown), set by setup's read, every poll, and the
+  controller commands; every switch into scene mode happens under `ownership`. A scene command the controller took counts as a running scene even if the
   read-back fails (a recalled preset whose read failed left the model at Off, so the next DDP turn_on skipped the
   Off); the next poll corrects it. In DDP mode a DDP change takes only `ownership` (it never waits on a poll's HTTP:
   with a 2 s page delay a turn_on took about 6 s), and scene commands and polls flip the mode and hand the lights

@@ -30,7 +30,7 @@ one registry entry). See `DECISIONS.md`.
   once the controller took it (`_hand_back`, nothing sent, nothing held); `follow_poll` (the coordinator's `on_poll`
   hook) does the same for a scene started outside HA; `leave_scene` turns the controller Off before a DDP light
   drives pixels (best effort when the mode is unknown). `runtime.scene_mode` (True/False/None) is the DDP lights' model
-  of the controller, set under `ownership` by setup, polls and commands (a taken scene command counts even if its
+  of the controller, set by setup, polls and commands (scene mode is entered only under `ownership`) (a taken scene command counts even if its
   read-back fails). Everything runs under the coordinator lock and publishes the result
 - `coordinator.py`: `DDPScenesCoordinator` (30 s poll of the controller state and palette); `lock` serializes polls and
   commands, so a stale poll cannot undo a command; `on_poll`; `last_effect`. `diagnostics.py`: redacted entry, sender,

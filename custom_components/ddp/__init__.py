@@ -110,9 +110,10 @@ class DDPRuntime:
     segment_lights: list[DDPSegmentLight] = field(default_factory=list)
     ownership: asyncio.Lock = field(default_factory=asyncio.Lock)
     # Scene mode (True: the controller runs a scene, every DDP light is off), DDP mode (False), or unknown (None: the
-    # controller has not been read yet). The DDP lights' model of the controller, changed only under ``ownership`` by
-    # setup, polls and controller commands (a scene command counts as running once the controller took it, even if
-    # the read-back fails), so a DDP change that checks it under ``ownership`` never misses a scene start.
+    # controller has not been read yet). The DDP lights' model of the controller, set by setup, polls and controller
+    # commands; every switch into scene mode happens under ``ownership`` (a scene command counts as running once the
+    # controller took it, even if the read-back fails), so a DDP change that checks it under ``ownership`` never misses
+    # a scene start.
     scene_mode: bool | None = None
 
     @property
