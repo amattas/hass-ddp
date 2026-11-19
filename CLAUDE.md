@@ -38,7 +38,8 @@ one registry entry). See `DECISIONS.md`.
 - `entity.py`: `DDPEntity` base (unique IDs; `device_info` picks the device, the DDP device by default). Devices: the
   DDP device `(DOMAIN, host)`, named "<title> Generic DDP" (the title alone for Generic), with All outputs; with more
   than one output one device per output `(DOMAIN, host:<segment key>)` (`output_identifier`, `output_device_info`),
-  named "<title> <output name>", its light the main entity and its pixel lights "Light N"; for a vendor entry the
+  named "<title> <output name>", its light the main entity and its pixel lights "Light N" (`register_output_device`:
+  a newly created one takes the DDP device's area and user-set name + output name; existing or restored ones untouched); for a vendor entry the
   controller device `(DOMAIN, host:controller)` for the controller light, Color 1-5 and Scene. Child devices link by
   `via_device_id` (`child_device_info`); `ControllerEntity` is the controller entities' coordinator-entity base.
   `DeviceInfo` is built in one call (since HA 2026.11 it is not a dict)
