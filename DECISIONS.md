@@ -397,3 +397,43 @@ Output 2; whether it stuck depended on the gather order of [All off, Output 1 on
   on inside an on output is covered by both. Restore blacks the same pixels as before (off lights not yet held black).
 - Unchanged: `sent()` (used by `async_freeze`), the scene hand-back (`_enter_scene_mode`: no black, immediate
   release), and the "nothing driving" branch (`release(drain=True)`).
+
+## 2026-11-19: A palette change restarts the running scene
+
+- Hardware finding (NDB-Pro): changing palette colors while a built-in show runs updates the stored palette, but the
+  running show keeps rendering some of the old colors; turning the show off and on picks up the new ones.
+- Decided: after a palette change (Color 1-5, `ddp.set_colors`) while a scene runs, select the running scene again.
+  One coalesced restart per change: each successful palette write (re)starts a 0.3 s timer (`RESTART_DELAY`), so an
+  HA scene's five concurrent Color 1-5 writes, or `set_colors`' slot loop, restart it once, after the last write.
+  When it fires it takes the coordinator lock, reads the effect at that moment and, only if it is still a scene
+  (and the generation guard below allows it), calls `set_effect(effect)` once. In DDP mode ("Off") or with the effect unknown nothing is sent. It changes no
+  state or mode and touches no DDP light (scene mode already handed them back).
+- A plain `async_call_later` timer, not HA's `Debouncer`: the Debouncer fires a fixed cooldown after the first call
+  and does not push back on later calls. The timer is cancelled on unload (`entry.async_on_unload`); a restart in
+  flight is an entry background task, cancelled with the entry.
+- Generation guard (verifier finding: writes slower than the delay let each write's timer fire while the next write
+  held the lock, so an HA scene left five restarts behind). `ControllerCommands._generation` is bumped when a palette
+  write starts (before it waits for the lock, so a queued write already invalidates earlier restarts), when a
+  restart is armed (after a successful write; the timer carries that value), and by every command that sets the
+  effect. A restart that gets the lock does nothing unless its generation is still the current one, so exactly one
+  re-select follows the last write, `RESTART_DELAY` after it, however slow the writes.
+- A restart owed survives a failed write (verifier finding: Color 1 set, then Color 2 failing within 0.3 s left
+  the show on its old colors). `_restart_wanted` is set by every successful palette write and cleared by
+  `_drop_restart()` and when a restart runs (whether or not `set_effect` succeeds). A write that fails or is
+  cancelled, also while waiting for the lock, re-arms the restart if one is wanted and a scene runs, and its error
+  or cancellation still propagates (`_palette_write`). So a restart owed to an earlier good write runs once,
+  `RESTART_DELAY` after the last attempt; a failed write alone owes none.
+- Commands that set the effect cancel a pending restart and bump the generation under the lock before commanding
+  the controller: `turn_on`, `recall_preset` and `_controller_off` (`turn_off`, `leave_scene`, so a DDP light taking
+  over too). Otherwise a restart due after them would re-select the stale scene (verifier: over a recalled preset
+  whose read-back failed) or send a duplicate.
+- The restart is armed and sent only while `runtime.scene_mode` is True and the effect is a scene. When setup could
+  not read the controller (mode unknown) and a slot write's read-back then sees a scene, the mode stays unknown, so
+  that change does not restart the scene; accepted, the next palette change after a poll does.
+- A failed restart is logged as a warning naming the controller: the palette action has already returned, so there
+  is no caller to raise to.
+- Not Off then on: that would blank the lights between the two commands.
+- Unverified assumption: that selecting the effect already running restarts it with the new colors. Not tested on
+  hardware; if the firmware ignores a re-select of the running effect, the old colors stay until the show is
+  restarted by hand.
+- `set_intensity` is unchanged: no report that intensity has the same problem.

@@ -7,18 +7,24 @@ scene could never be shown truthfully). A command that starts a scene hands the 
 controller took it: every DDP light goes off without sending, and keepalive stops resending, so the controller's
 scene shows. A DDP light turned on while a scene runs first turns the controller off (``leave_scene``). Turning the
 controller off is its "Off" alone (in DDP mode it already is). The palette and intensity are the controller's own
-settings, so their commands change no mode.
+settings, so their commands change no mode. A palette change while a scene runs selects that scene again once the
+writes settle (``RESTART_DELAY``): a running NDB-Pro show keeps some of its old colors until it is selected again.
 ``follow_poll`` is the coordinator's ``on_poll``: a scene started outside HA turns the DDP lights off the same way.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import replace
+from datetime import datetime
+from functools import partial
 from typing import TYPE_CHECKING, Any
 
+from homeassistant.core import CALLBACK_TYPE, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers.event import async_call_later
 
 from .const import COLOR_COOL_WHITE, COLOR_WARM_WHITE, CONTROLLER_OFF, DOMAIN, RGB
 from .controller import (
@@ -31,7 +37,7 @@ from .controller import (
 from .coordinator import DDPScenesCoordinator, SceneState
 
 if TYPE_CHECKING:
-    from . import DDPRuntime
+    from . import DDPConfigEntry, DDPRuntime
 
 
 def scene_mode(effect: str | None) -> bool | None:
@@ -40,6 +46,10 @@ def scene_mode(effect: str | None) -> bool | None:
 
 
 _LOGGER = logging.getLogger(__name__)
+
+# Seconds after the last palette write before a running scene is selected again: an HA scene setting Color 1-5 makes
+# five writes, which then restart it once.
+RESTART_DELAY = 0.3
 
 # A palette slot holds a custom color or one of the controller's whites (sent as its exact value).
 MODE_COLOR = "color"
@@ -62,9 +72,16 @@ def slot_mode(color: RGB) -> str:
 class ControllerCommands:
     """The commands; ``entity_id`` (the entity the action was called on) names it in errors."""
 
-    def __init__(self, runtime: DDPRuntime, coordinator: DDPScenesCoordinator) -> None:
+    def __init__(self, runtime: DDPRuntime, coordinator: DDPScenesCoordinator, entry: DDPConfigEntry) -> None:
         self._runtime = runtime
+        self._entry = entry
         self.coordinator = coordinator
+        self._restart_timer: CALLBACK_TYPE | None = None
+        # Bumped when a palette write starts, when a restart is armed, and by every command that sets the effect:
+        # a restart runs only if nothing of the kind happened since it was armed.
+        self._generation = 0
+        # A successful palette write owes the running scene a restart, until one runs or a command drops it.
+        self._restart_wanted = False
 
     @property
     def effects(self) -> list[str]:
@@ -86,6 +103,7 @@ class ControllerCommands:
                 },
             )
         async with self.coordinator.lock:
+            self._drop_restart()
             try:
                 await self.coordinator.controller.set_effect(effect)
             except CONTROLLER_ERRORS as err:
@@ -120,6 +138,7 @@ class ControllerCommands:
             runtime.scene_mode = False  # assumed until a poll reads the controller: no request per DDP change
 
     async def _controller_off(self, entity_id: str | None) -> None:
+        self._drop_restart()
         try:
             await self.coordinator.controller.set_effect(CONTROLLER_OFF)
         except CONTROLLER_ERRORS as err:
@@ -139,6 +158,7 @@ class ControllerCommands:
     async def recall_preset(self, entity_id: str | None, preset: int) -> None:
         """Recall stored show ``preset`` (1-20), hand the pixels back, then read back what the controller runs."""
         async with self.coordinator.lock:
+            self._drop_restart()
             try:
                 await self.coordinator.controller.recall_preset(preset - 1)
             except CONTROLLER_ERRORS as err:
@@ -154,7 +174,7 @@ class ControllerCommands:
         background: RGB | None = None,
     ) -> None:
         """Make the palette exactly ``colors`` (the other slots empty; none: the controller picks random colors)."""
-        async with self.coordinator.lock:
+        async with self._palette_write():
             try:
                 await self.coordinator.controller.set_palette(colors, background=background)
             except CONTROLLER_ERRORS as err:
@@ -170,7 +190,7 @@ class ControllerCommands:
 
         Before the first successful read the other slots are unknown, so the palette is read back instead.
         """
-        async with self.coordinator.lock:
+        async with self._palette_write():
             try:
                 await self.coordinator.controller.set_color(slot, color)
             except CONTROLLER_ERRORS as err:
@@ -178,10 +198,86 @@ class ControllerCommands:
             data = self.coordinator.data
             if data is None or len(data.colors) != PALETTE_SLOTS:
                 await self.coordinator.async_read_after_command()
+            else:
+                colors = list(data.colors)
+                colors[slot - 1] = color
+                self._publish(colors=tuple(colors))
+
+    @asynccontextmanager
+    async def _palette_write(self) -> AsyncIterator[None]:
+        """A palette write under the coordinator's lock, and the restart it owes the running scene.
+
+        The generation is bumped before waiting for the lock, so an earlier restart cannot run ahead of this write. A
+        successful write wants a restart and (re)arms it; a write that fails or is cancelled (even while waiting for
+        the lock) re-arms one an earlier write is still owed, so it runs ``RESTART_DELAY`` after the last attempt.
+        """
+        self._generation += 1
+        written = False
+        try:
+            async with self.coordinator.lock:
+                yield
+                written = True
+                self._restart_wanted = True
+                self._schedule_restart()
+        finally:
+            if not written and self._restart_wanted:
+                self._schedule_restart()
+
+    def _schedule_restart(self) -> None:
+        """After a successful palette write: if a scene runs, (re)arm the timer that selects it again, so the writes
+        of one change restart it once, ``RESTART_DELAY`` after the last.
+        """
+        if not self._scene_runs():
+            return
+        self.cancel_restart()
+        self._generation += 1
+        self._restart_timer = async_call_later(
+            self.coordinator.hass, RESTART_DELAY, partial(self._restart_due, self._generation)
+        )
+
+    def _scene_runs(self) -> bool:
+        """A scene runs as far as the DDP lights know: scene mode, and a read or commanded effect other than "Off"."""
+        data = self.coordinator.data
+        return self._runtime.scene_mode is True and data is not None and bool(scene_mode(data.effect))
+
+    def _drop_restart(self) -> None:
+        """A command sets the effect: a pending restart would re-select a stale one. Caller holds the lock."""
+        self.cancel_restart()
+        self._generation += 1
+        self._restart_wanted = False
+
+    @callback
+    def cancel_restart(self, *_: Any) -> None:
+        """Drop a pending restart (also the entry's unload callback; a running one is cancelled with the entry's
+        background tasks)."""
+        if self._restart_timer is not None:
+            self._restart_timer()
+            self._restart_timer = None
+
+    @callback
+    def _restart_due(self, generation: int, _now: datetime) -> None:
+        self._restart_timer = None
+        self._entry.async_create_background_task(
+            self.coordinator.hass, self._restart_scene(generation), "ddp scene restart"
+        )
+
+    async def _restart_scene(self, generation: int) -> None:
+        """Select the scene running now again, so it draws the new palette. Not Off then on, which would blank the
+        pixels. Changes no state or mode, and touches no DDP light (scene mode already handed them back). A failure is
+        logged: the action that changed the palette has long returned."""
+        async with self.coordinator.lock:
+            # A later palette write, or a command or poll that changed the effect, came first.
+            data = self.coordinator.data
+            if generation != self._generation or not self._scene_runs() or data is None or data.effect is None:
                 return
-            colors = list(data.colors)
-            colors[slot - 1] = color
-            self._publish(colors=tuple(colors))
+            self._restart_wanted = False  # this restart pays it, whether or not it succeeds
+            effect = data.effect
+            try:
+                await self.coordinator.controller.set_effect(effect)
+            except CONTROLLER_ERRORS as err:
+                _LOGGER.warning(
+                    "Could not restart the scene on %s after a palette change: %s", self.coordinator.name, err
+                )
 
     async def follow_poll(self, previous: SceneState | None, state: SceneState) -> None:
         """A poll found the controller running a scene (started outside HA: its own UI, app or schedule): every DDP
