@@ -20,7 +20,8 @@ one registry entry). See `DECISIONS.md`.
 
 - `__init__.py`: `async_setup` registers the entity services: `ddp.set_pattern` (light domain, the DDP lights) and
   `ddp.recall_preset` / `ddp.set_colors` (light domain, the controller light); `DDPRuntime` (`entry.runtime_data`): one
-  `Strip`, one open `DDPSender`, segments, fps, runners, `sync_holds()` (the byte ranges keepalive resends follow the
+  `Strip`, one open `DDPSender` (every frame a burst of `FRAME_REPEATS` frames `FRAME_REPEAT_INTERVAL` apart, const.py;
+  tests/conftest.py sets 1 unless a test is marked `frame_repeats`), segments, fps, runners, `sync_holds()` (the byte ranges keepalive resends follow the
   DDP lights' state, read from `DDPSender.held`), the `Controller` built from the entry's stored `controller_type`
   (`None` for Generic), its `DDPScenesCoordinator` and `ControllerCommands`; `async_migrate_entry` (1 -> 2).
   `PLATFORMS` = light, select

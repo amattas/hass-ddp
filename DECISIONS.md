@@ -350,3 +350,25 @@ Superseded by 2026-11-19 (scene mode and DDP mode are exclusive).
   stored segment key); output devices whose output is then dropped are removed at setup.
 - Segment keys are `output<N>`, a layout's segment names or a pre-0.5 `all`, so `host:<key>` never collides with
   `host:controller`.
+
+## 2026-11-19: Every frame is sent as 3 frames 100 ms apart
+
+Hardware test on the NDB-Pro (firmware 2.0):
+
+- With its built-in effect set to Off, a single DDP frame is never shown, not even 70 s after Off.
+- A stream of frames 0.5 s or 1 s apart is shown, and the pixels hold about 20 s after the last frame (timed roughly
+  by eye).
+- A single frame over a running scene is dropped at once and the scene resumes.
+
+So the controller drops a lone frame after a gap. hass-ddp sent one frame per solid-color change (keepalive followed
+later), so a change after a gap, for example right after HA turned the controller's scene Off, showed nothing until
+the next keepalive.
+
+- Decision: every frame goes out as 3 frames 100 ms apart. The burst lives in aioddp (`DDPSender(repeat_frames=3,
+  repeat_interval=0.1)`), not here: the sender resends the current shadow of its held ranges from a background task,
+  `send_frame` does not wait (it runs under the coordinator lock), a newer frame restarts the countdown, `release()`
+  stops repeats of released pixels, and `close()` cancels them. hass-ddp sets it from `FRAME_REPEATS` /
+  `FRAME_REPEAT_INTERVAL` in const.py; it is not a user option.
+- Keepalive (default 1 s) and the hold/hand-back logic are unchanged.
+- Tests: an autouse fixture sends each frame once, because most tests assert the exact packets of a change after a
+  0.1 s settle; one test (marker `frame_repeats`) asserts the real burst.

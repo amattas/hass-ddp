@@ -43,6 +43,11 @@ DEFAULT_FPS: Final = 30
 DEFAULT_KEEPALIVE: Final = 1.0
 MIN_KEEPALIVE: Final = 0.5
 MAX_KEEPALIVE: Final = 300.0
+# Every frame goes out as a burst of FRAME_REPEATS frames FRAME_REPEAT_INTERVAL seconds apart (aioddp resends it from
+# the sender): the NDB-Pro (firmware 2.0) drops a lone DDP frame after a gap and only shows a stream, so a single frame
+# for a light change would not show until the next keepalive (DECISIONS.md 2026-11-19). Not a user option.
+FRAME_REPEATS: Final = 3
+FRAME_REPEAT_INTERVAL: Final = 0.1
 DEFAULT_PIXEL_LIGHTS: Final = False  # opt-in: a 122-pixel strip would add 122 entities
 
 COLOR_ORDERS: Final = {

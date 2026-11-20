@@ -43,6 +43,8 @@ from .const import (
     DEFAULT_HTTP_PORT,
     DEFAULT_KEEPALIVE,
     DOMAIN,
+    FRAME_REPEAT_INTERVAL,
+    FRAME_REPEATS,
     MAX_PATTERN_COLORS,
     PRESET_COUNT,
     SEGMENT_KEY,
@@ -263,7 +265,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
         entry.data[CONF_CONTROLLER_TYPE], entry.data[CONF_HOST], entry.data.get(CONF_HTTP_PORT, DEFAULT_HTTP_PORT)
     )
     keepalive = float(entry.options.get(CONF_KEEPALIVE, DEFAULT_KEEPALIVE))
-    sender = DDPSender(build_strip(entry), keepalive_interval=keepalive or None)
+    sender = DDPSender(
+        build_strip(entry),
+        keepalive_interval=keepalive or None,
+        repeat_frames=FRAME_REPEATS,
+        repeat_interval=FRAME_REPEAT_INTERVAL,
+    )
     try:
         await sender.open()
     except DDPSendError as err:

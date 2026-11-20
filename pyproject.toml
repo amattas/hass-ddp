@@ -16,7 +16,7 @@ dependencies = []
 [project.optional-dependencies]
 dev = [
     # Keep the aioddp and pyminleon commits identical to manifest.json.
-    "aioddp @ git+https://github.com/amattas/aioddp.git@48cfc5c60f1db469ea9467c6d2b77fe72cab6b47",
+    "aioddp @ git+https://github.com/amattas/aioddp.git@f52aaeb774b4d42fd2e0e7f9861dcc860b90305b",
     "homeassistant==2026.10.4",
     "mypy==2.4.1",
     "pyminleon @ git+https://github.com/amattas/pyminleon.git@eb56e3ad1d19323242e03bf4fbb84dab288a7004",
@@ -34,6 +34,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "--cov=custom_components.ddp --cov-report=term-missing:skip-covered"
+markers = ["frame_repeats: keep the entry sender's frame repeat burst (tests/conftest.py sets it to 1 otherwise)"]
 
 [tool.coverage.report]
 fail_under = 95
