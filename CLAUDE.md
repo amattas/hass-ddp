@@ -20,7 +20,9 @@ one registry entry). See `DECISIONS.md`.
 
 - `__init__.py`: `async_setup` registers the entity services: `ddp.set_pattern` (light domain, the DDP lights) and
   `ddp.recall_preset` / `ddp.set_colors` (light domain, the controller light); `DDPRuntime` (`entry.runtime_data`): one
-  `Strip`, one open `DDPSender`, segments, fps, runners, `sync_holds()` (the byte ranges keepalive resends follow the
+  `Strip`, one open `DDPSender` (every frame a burst of `FRAME_REPEATS` frames `FRAME_REPEAT_INTERVAL` apart, const.py;
+  tests/conftest.py sets 1 unless a test is marked `frame_repeats`), segments, fps, runners, `sync_holds()` (releases with `drain=True` when no DDP light is on; otherwise blacks, in merged runs, the off lights'
+  pixels no on light covers unless already held black; the byte ranges keepalive resends follow the
   DDP lights' state, read from `DDPSender.held`), the `Controller` built from the entry's stored `controller_type`
   (`None` for Generic), its `DDPScenesCoordinator` and `ControllerCommands`; `async_migrate_entry` (1 -> 2).
   `PLATFORMS` = light, select
@@ -56,7 +58,7 @@ one registry entry). See `DECISIONS.md`.
   aioddp effects, `ddp.set_pattern` (kept in restore state); a `source` of `off`/`ddp`; every change runs under
   `_drive`: in DDP mode (`runtime.scene_mode` False) only `ownership`, never waiting on the controller; otherwise the
   coordinator lock, `leave_scene`, then `ownership`; restore sends nothing in scene mode and syncs the holds; `AllOutputsLight` over the whole strip when there is more than one segment (DDP lights
-  that share pixels hand them to each other without sending); `PaletteLight` "Color 1".."Color 5", one palette slot
+  that share pixels hand them to each other; `sync_holds` then blacks the pixels the taker does not cover); `PaletteLight` "Color 1".."Color 5", one palette slot
   each: RGB, or color temperature (2700 K warm, 6500 K cool) while it holds a white. `PixelLight` (option
   `pixel_lights`): one per pixel of every output, Light N = DDP pixel `start + N - 1` (the controller applies a port
   reverse itself), "Light N" on its output's device (`OutputPixelLight`: "<output> Light N" on the DDP device when
