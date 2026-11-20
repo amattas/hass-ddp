@@ -369,8 +369,13 @@ Superseded by 2026-11-19 (scene mode and DDP mode are exclusive).
   write starts (before it waits for the lock, so a queued write already invalidates earlier restarts), when a
   restart is armed (after a successful write; the timer carries that value), and by every command that sets the
   effect. A restart that gets the lock does nothing unless its generation is still the current one, so exactly one
-  re-select follows the last write, `RESTART_DELAY` after it, however slow the writes. A failed write arms nothing:
-  a restart an earlier write armed is dropped with it, and the next successful write arms a new one.
+  re-select follows the last write, `RESTART_DELAY` after it, however slow the writes.
+- A restart owed survives a failed write (verifier finding: Color 1 set, then Color 2 failing within 0.3 s left
+  the show on its old colors). `_restart_wanted` is set by every successful palette write and cleared by
+  `_drop_restart()` and when a restart runs (whether or not `set_effect` succeeds). A write that fails or is
+  cancelled, also while waiting for the lock, re-arms the restart if one is wanted and a scene runs, and its error
+  or cancellation still propagates (`_palette_write`). So a restart owed to an earlier good write runs once,
+  `RESTART_DELAY` after the last attempt; a failed write alone owes none.
 - Commands that set the effect cancel a pending restart and bump the generation under the lock before commanding
   the controller: `turn_on`, `recall_preset` and `_controller_off` (`turn_off`, `leave_scene`, so a DDP light taking
   over too). Otherwise a restart due after them would re-select the stale scene (verifier: over a recalled preset

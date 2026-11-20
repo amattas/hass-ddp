@@ -15,7 +15,8 @@ writes settle (``RESTART_DELAY``): a running NDB-Pro show keeps some of its old 
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime
 from functools import partial
@@ -79,6 +80,8 @@ class ControllerCommands:
         # Bumped when a palette write starts, when a restart is armed, and by every command that sets the effect:
         # a restart runs only if nothing of the kind happened since it was armed.
         self._generation = 0
+        # A successful palette write owes the running scene a restart, until one runs or a command drops it.
+        self._restart_wanted = False
 
     @property
     def effects(self) -> list[str]:
@@ -171,8 +174,7 @@ class ControllerCommands:
         background: RGB | None = None,
     ) -> None:
         """Make the palette exactly ``colors`` (the other slots empty; none: the controller picks random colors)."""
-        self._generation += 1  # before waiting for the lock: an earlier restart must not run ahead of this write
-        async with self.coordinator.lock:
+        async with self._palette_write():
             try:
                 await self.coordinator.controller.set_palette(colors, background=background)
             except CONTROLLER_ERRORS as err:
@@ -182,15 +184,13 @@ class ControllerCommands:
                 self._publish(colors=slots)
             else:
                 self._publish(colors=slots, background=background)
-            self._schedule_restart()
 
     async def set_color(self, entity_id: str | None, slot: int, color: RGB) -> None:
         """Set palette ``slot`` (1-based) to ``color`` (``EMPTY_COLOR`` empties it).
 
         Before the first successful read the other slots are unknown, so the palette is read back instead.
         """
-        self._generation += 1  # before waiting for the lock: an earlier restart must not run ahead of this write
-        async with self.coordinator.lock:
+        async with self._palette_write():
             try:
                 await self.coordinator.controller.set_color(slot, color)
             except CONTROLLER_ERRORS as err:
@@ -202,11 +202,30 @@ class ControllerCommands:
                 colors = list(data.colors)
                 colors[slot - 1] = color
                 self._publish(colors=tuple(colors))
-            self._schedule_restart()
+
+    @asynccontextmanager
+    async def _palette_write(self) -> AsyncIterator[None]:
+        """A palette write under the coordinator's lock, and the restart it owes the running scene.
+
+        The generation is bumped before waiting for the lock, so an earlier restart cannot run ahead of this write. A
+        successful write wants a restart and (re)arms it; a write that fails or is cancelled (even while waiting for
+        the lock) re-arms one an earlier write is still owed, so it runs ``RESTART_DELAY`` after the last attempt.
+        """
+        self._generation += 1
+        written = False
+        try:
+            async with self.coordinator.lock:
+                yield
+                written = True
+                self._restart_wanted = True
+                self._schedule_restart()
+        finally:
+            if not written and self._restart_wanted:
+                self._schedule_restart()
 
     def _schedule_restart(self) -> None:
         """After a successful palette write: if a scene runs, (re)arm the timer that selects it again, so the writes
-        of one change restart it once, ``RESTART_DELAY`` after the last. Caller holds the coordinator's lock.
+        of one change restart it once, ``RESTART_DELAY`` after the last.
         """
         if not self._scene_runs():
             return
@@ -225,6 +244,7 @@ class ControllerCommands:
         """A command sets the effect: a pending restart would re-select a stale one. Caller holds the lock."""
         self.cancel_restart()
         self._generation += 1
+        self._restart_wanted = False
 
     @callback
     def cancel_restart(self, *_: Any) -> None:
@@ -250,6 +270,7 @@ class ControllerCommands:
             data = self.coordinator.data
             if generation != self._generation or not self._scene_runs() or data is None or data.effect is None:
                 return
+            self._restart_wanted = False  # this restart pays it, whether or not it succeeds
             effect = data.effect
             try:
                 await self.coordinator.controller.set_effect(effect)

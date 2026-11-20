@@ -36,7 +36,8 @@ one registry entry). See `DECISIONS.md`.
   scene once, under the lock, so it draws the new colors (DECISIONS.md 2026-11-19, unverified on hardware); a failure
   is logged. `_generation` guards it: bumped when a palette write starts, when a restart is armed, and by every
   command that sets the effect (`_drop_restart`: turn_on, recall_preset, `_controller_off`), so only the restart
-  armed by the last write runs, and none after a command changed the effect
+  armed by the last write runs, and none after a command changed the effect; `_restart_wanted` keeps a restart owed
+  to a good write across a later failed or cancelled one (`_palette_write`)
 - `coordinator.py`: `DDPScenesCoordinator` (30 s poll of the controller state and palette); `lock` serializes polls and
   commands, so a stale poll cannot undo a command; `on_poll`; `last_effect`. `diagnostics.py`: redacted entry, sender,
   and controller documents

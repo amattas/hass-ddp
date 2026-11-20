@@ -1213,14 +1213,52 @@ async def _two_writes_apart(hass: HomeAssistant, entry: MockConfigEntry) -> None
     await _call(hass, SERVICE_TURN_ON, COLORS[1], rgb_color=(0, 255, 0))
 
 
-@pytest.mark.parametrize("change", [_slow_scene_palette, _two_writes_apart], ids=["slow-writes", "push-back"])
+async def _failing_slot_2(hass: HomeAssistant, entry: MockConfigEntry) -> None:
+    with (
+        patch.object(entry.runtime_data.controller, "set_color", side_effect=ControllerError("gone")),
+        pytest.raises(HomeAssistantError),
+    ):
+        await _call(hass, SERVICE_TURN_ON, COLORS[1], rgb_color=(0, 255, 0))
+
+
+async def _good_then_failed(hass: HomeAssistant, entry: MockConfigEntry) -> None:
+    """Color 1 is set, then Color 2 fails: the restart Color 1 is owed still runs."""
+    await _set_slot(hass)
+    await _failing_slot_2(hass, entry)
+
+
+async def _good_then_cancelled(hass: HomeAssistant, entry: MockConfigEntry) -> None:
+    """Color 1 is set, then a Color 2 write is cancelled while it waits for the lock."""
+    await _set_slot(hass)
+    lock = entry.runtime_data.scenes.lock
+    async with lock:
+        write = asyncio.ensure_future(entry.runtime_data.commands.set_color(COLORS[1], 2, (0, 255, 0)))
+        await asyncio.sleep(0)  # the write is waiting for the lock
+        write.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await write
+
+
+@pytest.mark.parametrize(
+    ("change", "restarted"),
+    [
+        (_slow_scene_palette, True),
+        (_two_writes_apart, True),
+        (_good_then_failed, True),
+        (_good_then_cancelled, True),
+        (_failing_slot_2, False),  # nothing changed the palette
+    ],
+    ids=["slow-writes", "push-back", "good-then-failed", "good-then-cancelled", "only-failed"],
+)
 async def test_the_scene_restarts_once_after_the_last_palette_write(
     hass: HomeAssistant,
     fake_controller: FakeController,
     ndb_entry: MockConfigEntry,
     change: Callable[[HomeAssistant, MockConfigEntry], Awaitable[None]],
+    restarted: bool,
 ) -> None:
-    """Real time: the restart is due 0.3 s after the last write, however long the writes took or how far apart."""
+    """Real time: the restart is due 0.3 s after the last write attempt, however long the writes took, how far apart,
+    or whether the last one failed."""
     fake_controller.select("Glow")
     await _poll(ndb_entry)
     fake_controller.requests.clear()
@@ -1231,8 +1269,9 @@ async def test_the_scene_restarts_once_after_the_last_palette_write(
     assert restart not in fake_controller.commands()
     await asyncio.sleep(0.3)
     await hass.async_block_till_done(wait_background_tasks=True)
-    assert [c for c in fake_controller.commands() if c == restart] == [restart]
-    assert fake_controller.commands()[-1] == restart
+    assert [c for c in fake_controller.commands() if c == restart] == ([restart] if restarted else [])
+    if restarted:
+        assert fake_controller.commands()[-1] == restart
 
 
 async def test_recall_preset_read_back_failure_marks_the_controller_unavailable(
