@@ -15,8 +15,9 @@ output its light and pixel lights ("<output> Light N") are on the DDP device.
 Source: each DDP light is lit by nothing (``off``) or by HA over DDP (``ddp``, on).
 
 Ownership: lights whose pixels overlap (All outputs, each output, each pixel light) take the pixels from each other.
-Turning one on over DDP stops the overlapping lights' runners and shows them off without sending anything; the pixels
-then show only the light that was turned on, where it covers them. One exception: a pixel light turns nothing off.
+Turning one on over DDP stops the overlapping lights' runners and shows them off; the pixels then show only the light
+that was turned on, where it covers them, and black elsewhere (``sync_holds`` blanks what the handed-back lights had
+lit outside it). One exception: a pixel light turns nothing off.
 Its output and All outputs stay on, lighting their other pixels (an effect or pattern stops, its last frame frozen,
 effect off); last write wins per pixel. Turning a light off blanks all its pixels, so the lights inside it go off
 with it. Which pixels the sender keeps resending follows the lights' state (``DDPRuntime.sync_holds``, after every

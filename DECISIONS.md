@@ -351,6 +351,53 @@ Superseded by 2026-11-19 (scene mode and DDP mode are exclusive).
 - Segment keys are `output<N>`, a layout's segment names or a pre-0.5 `all`, so `host:<key>` never collides with
   `host:controller`.
 
+## 2026-11-19: Every frame is sent as 3 frames 100 ms apart
+
+Hardware test on the NDB-Pro (firmware 2.0):
+
+- With its built-in effect set to Off, a single DDP frame is never shown, not even 70 s after Off.
+- A stream of frames 0.5 s or 1 s apart is shown, and the pixels hold about 20 s after the last frame (timed roughly
+  by eye).
+- A single frame over a running scene is dropped at once and the scene resumes.
+
+So the controller drops a lone frame after a gap. hass-ddp sent one frame per solid-color change (keepalive followed
+later), so a change after a gap, for example right after HA turned the controller's scene Off, showed nothing until
+the next keepalive.
+
+- Decision: every frame goes out as 3 frames 100 ms apart. The burst lives in aioddp (`DDPSender(repeat_frames=3,
+  repeat_interval=0.1)`), not here: the sender resends the current shadow of its held ranges from a background task,
+  `send_frame` does not wait (it runs under the coordinator lock), a newer frame restarts the countdown, `release()`
+  stops repeats of released pixels, and `close()` cancels them. hass-ddp sets it from `FRAME_REPEATS` /
+  `FRAME_REPEAT_INTERVAL` in const.py; it is not a user option.
+- Keepalive (default 1 s) and the hold/hand-back logic are unchanged, with one exception (verifier finding: turning
+  the last light off released the sender at once, so its black went out once, the lone frame the NDB-Pro drops):
+  `sync_holds` releases with `release(drain=True)`, which lets the pending burst finish before the pixels stop being
+  resent (keepalive and `held` drop them at once). The scene hand-back keeps the immediate `release()`: no DDP, a
+  scheduled repeat included, is sent once a scene takes over.
+- aioddp also guarantees no repeat task outlives `close()` (a frame racing `close()` started one; verifier finding).
+- Tests: an autouse fixture sends each frame once, because most tests assert the exact packets of a change after a
+  0.1 s settle; one test (marker `frame_repeats`) asserts the real burst.
+
+## 2026-11-19: A taken-over light's leftover pixels go black
+
+Bug (reproduced, approved to fix): a DDP light that takes pixels from an overlapping one (`_take_pixels` ->
+`async_hand_back`) showed the other off and sent nothing, so the pixels the taker does not cover kept their old
+color. All outputs red, then Output 1 green: All outputs and Output 2 showed off, Output 2's 42 pixels stayed red, and
+keepalive kept resending it. `sync_holds` counted `sender.held` as covered, and the held range still carried All
+outputs' stale red. A later scene all-off skipped the lights already off (HA's reproduce_state), so nothing blanked
+Output 2; whether it stuck depended on the gather order of [All off, Output 1 on, Output 2 off].
+
+- Decision: while a DDP light drives, `sync_holds` blacks every off DDP light's pixels that no on (`ddp`) light
+  covers; `sender.held` no longer counts as coverage. The off lights' segments are merged into runs and the on ones
+  subtracted, one `sender.off` per run, so the pixel-lights option does not send a frame per pixel light.
+- A run the sender already holds black (its shadow, `stats.last_frame`) is skipped (deviation from the brief, which
+  allowed re-sending: it keeps turn_off from sending its black twice and restore from re-blacking at every light). A
+  stale frame is never black, so it is still blanked.
+- An on light is never blackened: a `ddp` light covers its segment before its runner's first frame, and a pixel light
+  on inside an on output is covered by both. Restore blacks the same pixels as before (off lights not yet held black).
+- Unchanged: `sent()` (used by `async_freeze`), the scene hand-back (`_enter_scene_mode`: no black, immediate
+  release), and the "nothing driving" branch (`release(drain=True)`).
+
 ## 2026-11-19: A palette change restarts the running scene
 
 - Hardware finding (NDB-Pro): changing palette colors while a built-in show runs updates the stored palette, but the

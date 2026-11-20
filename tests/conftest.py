@@ -45,10 +45,19 @@ class Packet:
     destination: int
     offset: int
     data: bytes
+    arrived: float = field(default=0.0, compare=False)  # loop.time() on arrival
 
     @property
     def push(self) -> bool:
         return bool(self.flags & 0x01)
+
+
+@pytest.fixture(autouse=True)
+def single_frame_sends(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Send each frame once: most tests assert the exact packets of a change after ``settle()`` (0.1 s), which the
+    repeat burst (3 frames 0.1 s apart) would land among. Tests marked ``frame_repeats`` keep the real burst."""
+    if request.node.get_closest_marker("frame_repeats") is None:
+        monkeypatch.setattr("custom_components.ddp.FRAME_REPEATS", 1)
 
 
 @dataclass
@@ -61,7 +70,8 @@ class Listener(asyncio.DatagramProtocol):
 
     def datagram_received(self, data: bytes, addr: tuple[str | Any, int]) -> None:
         flags, seq, dtype, dest, offset, length = HEADER.unpack_from(data)
-        self.packets.append(Packet(flags, seq & 0x0F, dtype, dest, offset, data[10 : 10 + length]))
+        arrived = asyncio.get_running_loop().time()
+        self.packets.append(Packet(flags, seq & 0x0F, dtype, dest, offset, data[10 : 10 + length], arrived))
         self._arrived.set()
 
     async def wait_for(self, predicate: Callable[[Packet], bool], timeout: float = 2.0) -> Packet:

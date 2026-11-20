@@ -57,9 +57,9 @@ Actions: `ddp.set_pattern` (DDP lights: the outputs and All outputs, not the pix
 The integration provides no triggers or conditions.
 
 **All outputs and the output lights share pixels**, so only one of them owns a pixel at a time. Turning All outputs on
-stops the output lights' effects and shows them off, without sending anything; turning an output light on does the same
-to All outputs. Nothing is blanked: the newly turned-on light simply draws over its own pixels, and an output that All
-outputs had lit keeps that frame until something else sends to it.
+stops the output lights' effects and shows them off; turning an output light on does the same to All outputs. The newly
+turned-on light draws over its own pixels, and the pixels it does not cover go black: turning Output 1 on over a red All
+outputs blanks Output 2, which now shows off. Its own pixels are never blanked first.
 
 **Pixel lights share their pixel** with their output light and All outputs, and the last write wins per pixel.
 Coloring a pixel light changes only that pixel, and its output (and All outputs) stays on, lighting its other pixels:
@@ -421,6 +421,10 @@ Wi-Fi name are redacted.
 - **DDP takes over the NDB-Pro, and it gives up after about 20 s.** DDP data overrides the controller's built-in
   effect at once; about 20 s after DDP stops it falls back to it, even mid solid color. The keepalive (default 1 s)
   prevents this; with keepalive 0 a solid color reverts after about 20 s.
+- **Every frame is sent three times, 100 ms apart.** The NDB-Pro ignores a lone DDP frame that arrives after a gap
+  (for example right after its scene is turned off) and only shows frames that keep coming. So each change goes out
+  as a short burst, and the last of it lands about 0.2 s after the change, the black of the last light turned off
+  included. Effects already stream and are unaffected. When a scene takes over, DDP stops at once, burst and all.
 - **Recalling a preset overwrites the controller's current colors** with the preset's. The integration never writes
   the controller's saved settings.
 - **A palette change restarts the running scene.** A running NDB-Pro show keeps some of its old colors after a
