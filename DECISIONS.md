@@ -369,6 +369,11 @@ the next keepalive.
   `send_frame` does not wait (it runs under the coordinator lock), a newer frame restarts the countdown, `release()`
   stops repeats of released pixels, and `close()` cancels them. hass-ddp sets it from `FRAME_REPEATS` /
   `FRAME_REPEAT_INTERVAL` in const.py; it is not a user option.
-- Keepalive (default 1 s) and the hold/hand-back logic are unchanged.
+- Keepalive (default 1 s) and the hold/hand-back logic are unchanged, with one exception (verifier finding: turning
+  the last light off released the sender at once, so its black went out once, the lone frame the NDB-Pro drops):
+  `sync_holds` releases with `release(drain=True)`, which lets the pending burst finish before the pixels stop being
+  resent (keepalive and `held` drop them at once). The scene hand-back keeps the immediate `release()`: no DDP, a
+  scheduled repeat included, is sent once a scene takes over.
+- aioddp also guarantees no repeat task outlives `close()` (a frame racing `close()` started one; verifier finding).
 - Tests: an autouse fixture sends each frame once, because most tests assert the exact packets of a change after a
   0.1 s settle; one test (marker `frame_repeats`) asserts the real burst.

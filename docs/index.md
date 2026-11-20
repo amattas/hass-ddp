@@ -44,7 +44,8 @@ for which controllers have been exercised.
   prevents this; with keepalive 0 a solid color reverts after about 20 s.
 - **Every frame is sent three times, 100 ms apart.** The NDB-Pro ignores a lone DDP frame that arrives after a gap
   (for example right after its scene is turned off) and only shows frames that keep coming. So each change goes out
-  as a short burst, and the last of it lands about 0.2 s after the change. Effects already stream and are unaffected.
+  as a short burst, and the last of it lands about 0.2 s after the change, the black of the last light turned off
+  included. Effects already stream and are unaffected. When a scene takes over, DDP stops at once, burst and all.
 - **Recalling a preset overwrites the controller's current colors** with the preset's. The integration never writes
   the controller's saved settings.
 - **Segment light state is assumed.** Changes made elsewhere (another sender) are not seen; the controller's own scene

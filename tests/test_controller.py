@@ -662,6 +662,7 @@ def _external_scene(fake_controller: FakeController) -> Callable[[HomeAssistant]
     [[(OUT1, {ATTR_EFFECT: "chase"}), (OUT2, {"rgb_color": (0, 0, 255)})], [(ALL, {ATTR_EFFECT: "chase"})]],
     ids=["outputs", "all-outputs"],
 )
+@pytest.mark.frame_repeats  # a repeat still pending when the scene takes over is not sent either
 async def test_scene_takes_the_pixels_back_from_ddp(
     hass: HomeAssistant,
     udp_listener: Listener,

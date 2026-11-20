@@ -184,24 +184,45 @@ async def test_turn_off_blanks_segment_and_releases_after_the_last(
 
 
 @pytest.mark.frame_repeats
+@pytest.mark.parametrize(
+    ("turn_off", "change", "held"),
+    [
+        # Output 2, then Output 1's held black; both stay held.
+        (False, [(OUT2_OFFSET, 42 * 3), (0, 80 * 3)], ((0, 122 * 3),)),
+        # The last light off: its black still goes out three times (drained), then nothing is held.
+        (True, [(OUT2_OFFSET, 42 * 3)], ()),
+    ],
+    ids=["on", "last-light-off"],
+)
 async def test_light_change_goes_out_as_three_frames_100_ms_apart(
-    hass: HomeAssistant, udp_listener: Listener, entry_factory: Callable[..., MockConfigEntry]
+    hass: HomeAssistant,
+    udp_listener: Listener,
+    entry_factory: Callable[..., MockConfigEntry],
+    turn_off: bool,
+    change: list[tuple[int, int]],
+    held: tuple[tuple[int, int], ...],
 ) -> None:
     # The NDB-Pro drops a lone frame after a gap (DECISIONS.md 2026-11-19); keepalive off so only the burst is sent.
     entry = entry_factory(options={"keepalive": 0})
     await _setup(hass, entry)
     await _turn_on(hass, OUT2, rgb_color=(255, 100, 0))
     await udp_listener.wait_for(lambda p: p.offset == OUT2_OFFSET)
+    if turn_off:
+        await udp_listener.settle(0.4)
+        udp_listener.packets.clear()
+        await _turn_off(hass, OUT2)
+        await udp_listener.wait_for(lambda p: p.offset == OUT2_OFFSET)
     await udp_listener.settle(0.4)
 
-    # The change itself (Output 2, then Output 1's held black), then two resends of every held pixel, latched once.
-    *change, first, second = udp_listener.packets
-    assert [(p.offset, len(p.data)) for p in change] == [(OUT2_OFFSET, 42 * 3), (0, 80 * 3)]
-    stats = entry.runtime_data.sender.stats
-    assert [(p.offset, p.data, p.push) for p in (first, second)] == [(0, stats.last_frame, True)] * 2
-    gaps = [first.arrived - change[-1].arrived, second.arrived - first.arrived]
+    # The change itself, then two resends of every pixel it held (or drained), latched once.
+    *sent, first, second = udp_listener.packets
+    assert [(p.offset, len(p.data)) for p in sent] == change
+    sender = entry.runtime_data.sender
+    assert [(p.offset, p.data, p.push) for p in (first, second)] == [(0, sender.stats.last_frame, True)] * 2
+    assert any(sender.stats.last_frame) is not turn_off  # the last light off leaves black
+    gaps = [first.arrived - sent[-1].arrived, second.arrived - first.arrived]
     assert all(0.09 <= gap < 0.15 for gap in gaps), gaps
-    assert (stats.repeats_sent, stats.keepalives_sent) == (2, 0)
+    assert sender.held == held
 
 
 @pytest.mark.parametrize("color", [BLUE, (0, 0, 255, 200)], ids=["rgb", "rgbw"])

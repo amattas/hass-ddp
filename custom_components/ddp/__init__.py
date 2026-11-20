@@ -129,14 +129,15 @@ class DDPRuntime:
         """Make the held pixels follow the lights' state (``holding``). Caller holds ``ownership``.
 
         With no DDP light on (Generic DDP all off, or a vendor controller in scene mode) nothing is held, so keepalive
-        resends nothing and the controller's own effect or scene takes the pixels back after its DDP timeout. While
-        one is on, every DDP light's pixels are held: an off light gets black where the sender holds nothing yet. The
-        held pixels are read from the sender (``DDPSender.held``), never from bookkeeping: a runner stopped before its
-        first frame never held its range. A ``ddp`` light's pixels count as covered even before its runner's first
-        frame, so they never get black. Raises ``DDPError``.
+        resends nothing and the controller's own effect or scene takes the pixels back after its DDP timeout. The
+        release drains: a pending repeat burst of the last frame still goes out (a scene hand-back releases at once).
+        While one is on, every DDP light's pixels are held: an off light gets black where the sender holds nothing
+        yet. The held pixels are read from the sender (``DDPSender.held``), never from bookkeeping: a runner stopped
+        before its first frame never held its range. A ``ddp`` light's pixels count as covered even before its
+        runner's first frame, so they never get black. Raises ``DDPError``.
         """
         if not self.ddp_driving:
-            self.sender.release()
+            self.sender.release(drain=True)  # the last frame (black) still goes out as a burst; keepalive stops now
             return
         channels = self.sender.strip.channels
         held = [Segment(_HELD, offset // channels, length // channels) for offset, length in self.sender.held]
