@@ -1073,27 +1073,86 @@ async def _go_offline(hass: HomeAssistant, entry: MockConfigEntry, fake_controll
     fake_controller.offline = True
 
 
+async def _another_scene(hass: HomeAssistant, entry: MockConfigEntry, fake_controller: FakeController) -> None:
+    await _turn_on_scene(hass)
+
+
+async def _controller_off(hass: HomeAssistant, entry: MockConfigEntry, fake_controller: FakeController) -> None:
+    await _off(hass)
+
+
+async def _preset(hass: HomeAssistant, entry: MockConfigEntry, fake_controller: FakeController) -> None:
+    await _recall_preset(hass)
+
+
+async def _preset_read_back_fails(hass: HomeAssistant, entry: MockConfigEntry, fake_controller: FakeController) -> None:
+    with patch.object(entry.runtime_data.controller, "state", side_effect=ControllerError("gone")):
+        await _recall_preset(hass)
+
+
+async def _ddp_light_takes_over(hass: HomeAssistant, entry: MockConfigEntry, fake_controller: FakeController) -> None:
+    await _call(hass, SERVICE_TURN_ON, OUT1, rgb_color=(0, 0, 255))
+
+
+async def _set_slot_unavailable(hass: HomeAssistant) -> None:
+    """Color 1 set while its entity is unavailable (the controller was never read), straight through the commands."""
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+    await entry.runtime_data.commands.set_color(COLORS[0], 1, (255, 0, 0))
+
+
 RED_SLOT_1 = [_color(1, "#ff0000")]
 
 
 @pytest.mark.parametrize(
-    ("running", "action", "writes", "meanwhile", "restarted"),
+    ("running", "unread", "action", "writes", "meanwhile", "restarted", "selected"),
     [
-        ("Glow", _set_slot, RED_SLOT_1, None, True),
+        ("Glow", False, _set_slot, RED_SLOT_1, None, True, "Glow"),
         (
             "Glow",
+            False,
             _apply_scene_palette,
             [_color(i, "#" + bytes(c).hex()) for i, c in enumerate(SCENE_COLORS, 1)],
             None,
             True,
+            "Glow",
         ),
-        ("Glow", _set_colors, [_color(1, "#ffffff"), *(_color(i, "#000000") for i in range(2, 6))], None, True),
-        ("Off", _set_slot, RED_SLOT_1, None, False),  # DDP mode: no scene to restart
-        ("Glow", _set_slot, RED_SLOT_1, _scene_stops, False),  # the effect is read when the restart is due
-        ("Glow", _set_slot, RED_SLOT_1, _unload, False),  # nothing outlives the entry
-        ("Glow", _set_slot, RED_SLOT_1, _go_offline, False),  # logged: no caller to raise to
+        (
+            "Glow",
+            False,
+            _set_colors,
+            [_color(1, "#ffffff"), *(_color(i, "#000000") for i in range(2, 6))],
+            None,
+            True,
+            "Glow",
+        ),
+        ("Off", False, _set_slot, RED_SLOT_1, None, False, "Off"),  # DDP mode: no scene to restart
+        ("Glow", False, _set_slot, RED_SLOT_1, _scene_stops, False, "Off"),  # the effect is read when it is due
+        ("Glow", False, _set_slot, RED_SLOT_1, _unload, False, "Glow"),  # nothing outlives the entry
+        ("Glow", False, _set_slot, RED_SLOT_1, _go_offline, False, "Glow"),  # logged: no caller to raise to
+        # A command that sets the effect inside the window drops the pending restart.
+        ("Glow", False, _set_slot, RED_SLOT_1, _another_scene, False, "Show1"),
+        ("Glow", False, _set_slot, RED_SLOT_1, _controller_off, False, "Off"),
+        ("Glow", False, _set_slot, RED_SLOT_1, _preset, False, "Show1"),
+        ("Glow", False, _set_slot, RED_SLOT_1, _preset_read_back_fails, False, "Show1"),
+        ("Glow", False, _set_slot, RED_SLOT_1, _ddp_light_takes_over, False, "Off"),
+        # Never read at setup: the mode stays unknown, so no restart, even after the read-back sees a scene.
+        ("Glow", True, _set_slot_unavailable, RED_SLOT_1, None, False, "Glow"),
     ],
-    ids=["slot", "ha-scene", "set_colors", "ddp-mode", "scene-stopped", "unloaded", "restart-fails"],
+    ids=[
+        "slot",
+        "ha-scene",
+        "set_colors",
+        "ddp-mode",
+        "scene-stopped",
+        "unloaded",
+        "restart-fails",
+        "another-scene",
+        "controller-off",
+        "preset",
+        "preset-read-back-fails",
+        "ddp-light",
+        "unread-at-setup",
+    ],
 )
 async def test_a_palette_change_restarts_the_running_scene_once(
     hass: HomeAssistant,
@@ -1101,16 +1160,20 @@ async def test_a_palette_change_restarts_the_running_scene_once(
     entry_factory: Callable[..., MockConfigEntry],
     caplog: pytest.LogCaptureFixture,
     running: str,
+    unread: bool,
     action: Callable[[HomeAssistant], Awaitable[None]],
     writes: list[tuple[str, str, bytes]],
     meanwhile: Callable[[HomeAssistant, MockConfigEntry, FakeController], Awaitable[None]] | None,
     restarted: bool,
+    selected: str,
 ) -> None:
     """A running show keeps some old colors until it is selected again (seen on the NDB-Pro): one re-select after
-    the last palette write, however many writes a change makes."""
+    the last palette write, however many writes a change makes, unless a command set the effect meanwhile."""
     fake_controller.select(running)
+    fake_controller.offline = unread
     entry = entry_factory(controller=fake_controller)
     await _setup(hass, entry)
+    fake_controller.offline = False
     runtime = entry.runtime_data
     fake_controller.requests.clear()
 
@@ -1118,16 +1181,58 @@ async def test_a_palette_change_restarts_the_running_scene_once(
     assert sorted(fake_controller.commands()) == sorted(writes)  # concurrent writes land in any order
     if meanwhile is not None:
         await meanwhile(hass, entry, fake_controller)
-    mode = runtime.scene_mode
+    before, mode = len(fake_controller.commands()), runtime.scene_mode
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=1))
     await hass.async_block_till_done(wait_background_tasks=True)
 
-    commands = [c for c in fake_controller.commands() if c[0] == "POST"]
-    assert commands[len(writes) :] == ([_control(f'{{"fx":"{running}"}}')] if restarted else [])
+    assert fake_controller.commands()[before:] == ([_control(f'{{"fx":"{running}"}}')] if restarted else [])
+    assert fake_controller.selected() == selected
     assert (f"Could not restart the scene on {entry.title}" in caplog.text) == (meanwhile is _go_offline)
     assert runtime.scene_mode is mode  # the restart changes no mode
     if entry.state is ConfigEntryState.LOADED:
         assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def _slow_scene_palette(hass: HomeAssistant, entry: MockConfigEntry) -> None:
+    """An HA scene setting Color 1-5 while each write takes longer than the restart delay."""
+    controller = entry.runtime_data.controller
+    write = controller.set_color
+
+    async def slow(*args: Any) -> None:
+        await asyncio.sleep(0.4)
+        await write(*args)
+
+    with patch.object(controller, "set_color", slow):
+        await _apply_scene_palette(hass)
+
+
+async def _two_writes_apart(hass: HomeAssistant, entry: MockConfigEntry) -> None:
+    """A second write 0.2 s after the first pushes the restart back."""
+    await _set_slot(hass)
+    await asyncio.sleep(0.2)
+    await _call(hass, SERVICE_TURN_ON, COLORS[1], rgb_color=(0, 255, 0))
+
+
+@pytest.mark.parametrize("change", [_slow_scene_palette, _two_writes_apart], ids=["slow-writes", "push-back"])
+async def test_the_scene_restarts_once_after_the_last_palette_write(
+    hass: HomeAssistant,
+    fake_controller: FakeController,
+    ndb_entry: MockConfigEntry,
+    change: Callable[[HomeAssistant, MockConfigEntry], Awaitable[None]],
+) -> None:
+    """Real time: the restart is due 0.3 s after the last write, however long the writes took or how far apart."""
+    fake_controller.select("Glow")
+    await _poll(ndb_entry)
+    fake_controller.requests.clear()
+    restart = _control('{"fx":"Glow"}')
+
+    await change(hass, ndb_entry)
+    await asyncio.sleep(0.2)
+    assert restart not in fake_controller.commands()
+    await asyncio.sleep(0.3)
+    await hass.async_block_till_done(wait_background_tasks=True)
+    assert [c for c in fake_controller.commands() if c == restart] == [restart]
+    assert fake_controller.commands()[-1] == restart
 
 
 async def test_recall_preset_read_back_failure_marks_the_controller_unavailable(
