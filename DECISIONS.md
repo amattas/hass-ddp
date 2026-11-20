@@ -350,3 +350,24 @@ Superseded by 2026-11-19 (scene mode and DDP mode are exclusive).
   stored segment key); output devices whose output is then dropped are removed at setup.
 - Segment keys are `output<N>`, a layout's segment names or a pre-0.5 `all`, so `host:<key>` never collides with
   `host:controller`.
+
+## 2026-11-19: A palette change restarts the running scene
+
+- Hardware finding (NDB-Pro): changing palette colors while a built-in show runs updates the stored palette, but the
+  running show keeps rendering some of the old colors; turning the show off and on picks up the new ones.
+- Decided: after a palette change (Color 1-5, `ddp.set_colors`) while a scene runs, select the running scene again.
+  One coalesced restart per change: each successful palette write (re)starts a 0.3 s timer (`RESTART_DELAY`), so an
+  HA scene's five concurrent Color 1-5 writes, or `set_colors`' slot loop, restart it once, after the last write.
+  When it fires it takes the coordinator lock, reads the effect at that moment and, only if it is still a scene,
+  calls `set_effect(effect)` once. In DDP mode ("Off") or with the effect unknown nothing is sent. It changes no
+  state or mode and touches no DDP light (scene mode already handed them back).
+- A plain `async_call_later` timer, not HA's `Debouncer`: the Debouncer fires a fixed cooldown after the first call
+  and does not push back on later calls. The timer is cancelled on unload (`entry.async_on_unload`); a restart in
+  flight is an entry background task, cancelled with the entry.
+- A failed restart is logged as a warning naming the controller: the palette action has already returned, so there
+  is no caller to raise to.
+- Not Off then on: that would blank the lights between the two commands.
+- Unverified assumption: that selecting the effect already running restarts it with the new colors. Not tested on
+  hardware; if the firmware ignores a re-select of the running effect, the old colors stay until the show is
+  restarted by hand.
+- `set_intensity` is unchanged: no report that intensity has the same problem.

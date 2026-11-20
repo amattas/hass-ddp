@@ -93,7 +93,9 @@ keep their entity IDs (for example `light.ndbpro_minleon_ndb_pro` and `light.ndb
   `colors` and `background` attributes show the palette as the controller reports it (`[0, 0, 0]` is an empty slot).
   `cool_white` and `warm_white` select the controller's white LEDs (it maps `#feffff` to cool white and pure white to
   warm white); an empty list clears the palette, so the controller picks random colors. Setting colors does not turn
-  the controller on or take the pixels from a DDP light, and it is not saved to the controller's flash.
+  the controller on or take the pixels from a DDP light, and it is not saved to the controller's flash. While a
+  scene runs, a palette change (here or on Color 1 to 5) selects that scene again about 0.3 s after the last write,
+  once, so it draws the new colors.
 - **Color 1** to **Color 5** set one palette slot each, read back by the same 30 s poll. A Color N light has a Color
   tab and a Temperature tab, the white picker; it shows the tab the slot reads: `#c69740` (how the controller reports
   Warm White once set) or `#ffffff` is Warm White, `#feffff` is Cool White, anything else is a color. A color sets the
@@ -127,7 +129,8 @@ truthfully. A vendor controller is therefore either in **scene mode** (it runs a
 - In DDP mode the DDP lights work as on a Generic DDP controller: an off output stays black (held by the keepalive)
   while another DDP light is on; when the last one turns off, DDP stops and about 20 s later the controller shows its
   own `Off`. Turning the controller light off selects `Off` and leaves DDP mode alone.
-- Palette changes (Color 1 to 5, `ddp.set_colors`) change no mode.
+- Palette changes (Color 1 to 5, `ddp.set_colors`) change no mode. While a scene runs, one change (an HA scene
+  setting all five slots included) re-selects that scene once, so it picks up the new colors.
 - After a Home Assistant restart the DDP lights restore and re-send their last look only if the controller is not
   running a scene (setup reads its state and never commands it; if it cannot be read, they are re-sent and the first
   good poll turns them off if a scene runs). The off DDP lights next to a restored one are held black.

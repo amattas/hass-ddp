@@ -1050,6 +1050,86 @@ async def test_errors(
     assert _state(hass, OUT1).state == out1_after
 
 
+SCENE_COLORS = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (0, 255, 255)]
+
+
+async def _apply_scene_palette(hass: HomeAssistant) -> None:
+    """Color 1-5 set at once, as Home Assistant applies a scene."""
+    await asyncio.gather(
+        *(_call(hass, SERVICE_TURN_ON, light, rgb_color=rgb) for light, rgb in zip(COLORS, SCENE_COLORS, strict=True))
+    )
+
+
+async def _scene_stops(hass: HomeAssistant, entry: MockConfigEntry, fake_controller: FakeController) -> None:
+    fake_controller.select("Off")
+    await _poll(entry)
+
+
+async def _unload(hass: HomeAssistant, entry: MockConfigEntry, fake_controller: FakeController) -> None:
+    assert await hass.config_entries.async_unload(entry.entry_id)
+
+
+async def _go_offline(hass: HomeAssistant, entry: MockConfigEntry, fake_controller: FakeController) -> None:
+    fake_controller.offline = True
+
+
+RED_SLOT_1 = [_color(1, "#ff0000")]
+
+
+@pytest.mark.parametrize(
+    ("running", "action", "writes", "meanwhile", "restarted"),
+    [
+        ("Glow", _set_slot, RED_SLOT_1, None, True),
+        (
+            "Glow",
+            _apply_scene_palette,
+            [_color(i, "#" + bytes(c).hex()) for i, c in enumerate(SCENE_COLORS, 1)],
+            None,
+            True,
+        ),
+        ("Glow", _set_colors, [_color(1, "#ffffff"), *(_color(i, "#000000") for i in range(2, 6))], None, True),
+        ("Off", _set_slot, RED_SLOT_1, None, False),  # DDP mode: no scene to restart
+        ("Glow", _set_slot, RED_SLOT_1, _scene_stops, False),  # the effect is read when the restart is due
+        ("Glow", _set_slot, RED_SLOT_1, _unload, False),  # nothing outlives the entry
+        ("Glow", _set_slot, RED_SLOT_1, _go_offline, False),  # logged: no caller to raise to
+    ],
+    ids=["slot", "ha-scene", "set_colors", "ddp-mode", "scene-stopped", "unloaded", "restart-fails"],
+)
+async def test_a_palette_change_restarts_the_running_scene_once(
+    hass: HomeAssistant,
+    fake_controller: FakeController,
+    entry_factory: Callable[..., MockConfigEntry],
+    caplog: pytest.LogCaptureFixture,
+    running: str,
+    action: Callable[[HomeAssistant], Awaitable[None]],
+    writes: list[tuple[str, str, bytes]],
+    meanwhile: Callable[[HomeAssistant, MockConfigEntry, FakeController], Awaitable[None]] | None,
+    restarted: bool,
+) -> None:
+    """A running show keeps some old colors until it is selected again (seen on the NDB-Pro): one re-select after
+    the last palette write, however many writes a change makes."""
+    fake_controller.select(running)
+    entry = entry_factory(controller=fake_controller)
+    await _setup(hass, entry)
+    runtime = entry.runtime_data
+    fake_controller.requests.clear()
+
+    await action(hass)
+    assert sorted(fake_controller.commands()) == sorted(writes)  # concurrent writes land in any order
+    if meanwhile is not None:
+        await meanwhile(hass, entry, fake_controller)
+    mode = runtime.scene_mode
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=1))
+    await hass.async_block_till_done(wait_background_tasks=True)
+
+    commands = [c for c in fake_controller.commands() if c[0] == "POST"]
+    assert commands[len(writes) :] == ([_control(f'{{"fx":"{running}"}}')] if restarted else [])
+    assert (f"Could not restart the scene on {entry.title}" in caplog.text) == (meanwhile is _go_offline)
+    assert runtime.scene_mode is mode  # the restart changes no mode
+    if entry.state is ConfigEntryState.LOADED:
+        assert await hass.config_entries.async_unload(entry.entry_id)
+
+
 async def test_recall_preset_read_back_failure_marks_the_controller_unavailable(
     hass: HomeAssistant, udp_listener: Listener, fake_controller: FakeController, ndb_entry: MockConfigEntry
 ) -> None:

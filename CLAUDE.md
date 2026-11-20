@@ -31,7 +31,10 @@ one registry entry). See `DECISIONS.md`.
   hook) does the same for a scene started outside HA; `leave_scene` turns the controller Off before a DDP light
   drives pixels (best effort when the mode is unknown). `runtime.scene_mode` (True/False/None) is the DDP lights' model
   of the controller, set by setup, polls and commands (scene mode is entered only under `ownership`) (a taken scene command counts even if its
-  read-back fails). Everything runs under the coordinator lock and publishes the result
+  read-back fails). Everything runs under the coordinator lock and publishes the result. A palette write while a
+  scene runs (re)starts a 0.3 s timer (`RESTART_DELAY`, `cancel_restart` on unload) that re-selects the running scene
+  once, under the lock, so it draws the new colors (DECISIONS.md 2026-11-19, unverified on hardware); a failure is
+  logged
 - `coordinator.py`: `DDPScenesCoordinator` (30 s poll of the controller state and palette); `lock` serializes polls and
   commands, so a stale poll cannot undo a command; `on_poll`; `last_effect`. `diagnostics.py`: redacted entry, sender,
   and controller documents

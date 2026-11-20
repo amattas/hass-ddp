@@ -44,6 +44,10 @@ for which controllers have been exercised.
   prevents this; with keepalive 0 a solid color reverts after about 20 s.
 - **Recalling a preset overwrites the controller's current colors** with the preset's. The integration never writes
   the controller's saved settings.
+- **A palette change restarts the running scene.** A running NDB-Pro show keeps some of its old colors after a
+  palette change, so the integration selects the running scene again about 0.3 s after the last palette write. That
+  re-selecting the running effect restarts it is not verified on hardware; if the colors still lag, turn the scene
+  off and on.
 - **Segment light state is assumed.** Changes made elsewhere (another sender) are not seen; the controller's own scene
   starting or stopping is, at the next 30 s poll.
 - **No DDP pixels over a running scene.** The controller cannot report its scenes' pixels, so a scene and the DDP

@@ -284,7 +284,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
     runtime = DDPRuntime(sender, segments, int(entry.options.get(CONF_FPS, DEFAULT_FPS)), controller, scenes)
     entry.runtime_data = runtime
     if scenes is not None:
-        runtime.commands = ControllerCommands(runtime, scenes)
+        runtime.commands = ControllerCommands(runtime, scenes, entry)
         # Not a setup gate: the DDP lights don't need the controller's HTTP UI, so a silent one leaves the controller
         # device's entities unavailable until a poll reaches them, instead of failing the entry. The mode is then
         # unknown: a DDP light turned on tries the controller's Off best effort and goes ahead if it does not answer.
@@ -293,6 +293,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: DDPConfigEntry) -> bool:
         # Polls reach the DDP lights through the commands, whichever controller entities are enabled.
         scenes.on_poll = runtime.commands.follow_poll
         entry.async_on_unload(_stop_following(scenes))
+        entry.async_on_unload(runtime.commands.cancel_restart)
     _remove_stale_entities(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
