@@ -57,9 +57,9 @@ Actions: `ddp.set_pattern` (DDP lights: the outputs and All outputs, not the pix
 The integration provides no triggers or conditions.
 
 **All outputs and the output lights share pixels**, so only one of them owns a pixel at a time. Turning All outputs on
-stops the output lights' effects and shows them off, without sending anything; turning an output light on does the same
-to All outputs. Nothing is blanked: the newly turned-on light simply draws over its own pixels, and an output that All
-outputs had lit keeps that frame until something else sends to it.
+stops the output lights' effects and shows them off; turning an output light on does the same to All outputs. The newly
+turned-on light draws over its own pixels, and the pixels it does not cover go black: turning Output 1 on over a red All
+outputs blanks Output 2, which now shows off. Its own pixels are never blanked first.
 
 **Pixel lights share their pixel** with their output light and All outputs, and the last write wins per pixel.
 Coloring a pixel light changes only that pixel, and its output (and All outputs) stays on, lighting its other pixels:

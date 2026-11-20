@@ -562,14 +562,63 @@ async def test_all_outputs_and_the_outputs_take_the_pixels_from_each_other(
     assert [hass.states.get(e).state for e in before] == [STATE_OFF] * len(before)  # type: ignore[union-attr]
     assert hass.states.get(taker).state == STATE_ON  # type: ignore[union-attr]
     assert list(runtime.runners) == [] and _effect_tasks() == []  # the taker is solid; the chases stopped
-    # Handed back, not blanked: no black frame, the taker's color last, and no chase frame after it.
+    # The taker's color last at offset 0, no chase frame after it. Where the taker does not reach (Output 2, when
+    # Output 1 takes), the handed-back chase's pixels go black and stay held; never black over the taker's pixels.
     pixels = 122 if taker == ALL else 80
-    assert not any(p.data == bytes(len(p.data)) for p in udp_listener.packets)
-    last = udp_listener.packets[-1]
-    assert (last.offset, last.data) == (0, process_frame(bytes(BLUE) * pixels, runtime.sender.strip))
+    strip = runtime.sender.strip
+    blacks = [(p.offset, len(p.data)) for p in udp_listener.packets if p.data == bytes(len(p.data))]
+    assert blacks == ([] if taker == ALL else [(OUT2_OFFSET, 42 * 3)])
+    assert [p.data for p in udp_listener.packets if p.offset == 0][-1] == process_frame(bytes(BLUE) * pixels, strip)
+    assert runtime.sender.stats.last_frame == process_frame(bytes(BLUE) * pixels, strip) + bytes((122 - pixels) * 3)
+    assert runtime.sender.held == ((0, 122 * 3),)
+    assert_holds_follow_lights(runtime)
     udp_listener.packets.clear()
     await udp_listener.settle()
     assert udp_listener.packets == []
+
+
+@pytest.mark.parametrize(
+    "calls",
+    [
+        [(ALL, False), (OUT1, True), (OUT2, False)],
+        [(OUT1, True), (ALL, False), (OUT2, False)],
+    ],
+    ids=["all-outputs-off-first", "output-on-first"],
+)
+async def test_scene_gather_after_all_outputs_leaves_no_pixel_lit(
+    hass: HomeAssistant, udp_listener: Listener, setup_entry: MockConfigEntry, calls: list[tuple[str, bool]]
+) -> None:
+    # A scene applied as HA does it (reproduce_state gathers the lights) after All outputs was red: whichever call
+    # wins, Output 1 takes over and the rest of All outputs' red is blacked, so a later all-off leaves nothing lit.
+    runtime = setup_entry.runtime_data
+    await _turn_on(hass, ALL, rgb_color=RED)
+    await asyncio.gather(*(_turn_on(hass, e, rgb_color=GREEN) if on else _turn_off(hass, e) for e, on in calls))
+    await udp_listener.settle()
+    green = process_frame(bytes(GREEN) * 80, runtime.sender.strip)
+    assert runtime.sender.stats.last_frame == green + bytes(42 * 3)
+    assert_holds_follow_lights(runtime)
+
+    await asyncio.gather(*(_turn_off(hass, e) for e in (ALL, OUT1, OUT2)))
+    await udp_listener.settle()
+
+    assert [hass.states.get(e).state for e in (ALL, OUT1, OUT2)] == [STATE_OFF] * 3  # type: ignore[union-attr]
+    assert runtime.sender.stats.last_frame == bytes(122 * 3)
+    assert runtime.sender.held == ()
+
+
+async def test_off_pixel_lights_get_black_in_merged_runs(
+    hass: HomeAssistant, udp_listener: Listener, entry_factory: Callable[..., MockConfigEntry]
+) -> None:
+    # One pixel on: the 121 off pixel lights and both outputs around it get black in one frame per run, not per light.
+    entry = entry_factory(options=PIXEL_OPTIONS)
+    await _setup(hass, entry)
+    await _turn_on(hass, _pixel(1, 40), rgb_color=RED)
+    await udp_listener.settle()
+
+    blacks = [(p.offset, len(p.data)) for p in udp_listener.packets if p.data == bytes(len(p.data))]
+    assert blacks == [(0, 39 * 3), (40 * 3, 82 * 3)]
+    assert_holds_follow_lights(entry.runtime_data)
+    assert await hass.config_entries.async_unload(entry.entry_id)
 
 
 @pytest.mark.parametrize(

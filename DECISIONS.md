@@ -377,3 +377,23 @@ the next keepalive.
 - aioddp also guarantees no repeat task outlives `close()` (a frame racing `close()` started one; verifier finding).
 - Tests: an autouse fixture sends each frame once, because most tests assert the exact packets of a change after a
   0.1 s settle; one test (marker `frame_repeats`) asserts the real burst.
+
+## 2026-11-19: A taken-over light's leftover pixels go black
+
+Bug (reproduced, approved to fix): a DDP light that takes pixels from an overlapping one (`_take_pixels` ->
+`async_hand_back`) showed the other off and sent nothing, so the pixels the taker does not cover kept their old
+color. All outputs red, then Output 1 green: All outputs and Output 2 showed off, Output 2's 42 pixels stayed red, and
+keepalive kept resending it. `sync_holds` counted `sender.held` as covered, and the held range still carried All
+outputs' stale red. A later scene all-off skipped the lights already off (HA's reproduce_state), so nothing blanked
+Output 2; whether it stuck depended on the gather order of [All off, Output 1 on, Output 2 off].
+
+- Decision: while a DDP light drives, `sync_holds` blacks every off DDP light's pixels that no on (`ddp`) light
+  covers; `sender.held` no longer counts as coverage. The off lights' segments are merged into runs and the on ones
+  subtracted, one `sender.off` per run, so the pixel-lights option does not send a frame per pixel light.
+- A run the sender already holds black (its shadow, `stats.last_frame`) is skipped (deviation from the brief, which
+  allowed re-sending: it keeps turn_off from sending its black twice and restore from re-blacking at every light). A
+  stale frame is never black, so it is still blanked.
+- An on light is never blackened: a `ddp` light covers its segment before its runner's first frame, and a pixel light
+  on inside an on output is covered by both. Restore blacks the same pixels as before (off lights not yet held black).
+- Unchanged: `sent()` (used by `async_freeze`), the scene hand-back (`_enter_scene_mode`: no black, immediate
+  release), and the "nothing driving" branch (`release(drain=True)`).

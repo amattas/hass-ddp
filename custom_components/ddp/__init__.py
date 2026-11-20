@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from bisect import insort
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -131,24 +130,26 @@ class DDPRuntime:
         With no DDP light on (Generic DDP all off, or a vendor controller in scene mode) nothing is held, so keepalive
         resends nothing and the controller's own effect or scene takes the pixels back after its DDP timeout. The
         release drains: a pending repeat burst of the last frame still goes out (a scene hand-back releases at once).
-        While one is on, every DDP light's pixels are held: an off light gets black where the sender holds nothing
-        yet. The held pixels are read from the sender (``DDPSender.held``), never from bookkeeping: a runner stopped
-        before its first frame never held its range. A ``ddp`` light's pixels count as covered even before its
-        runner's first frame, so they never get black. Raises ``DDPError``.
+        While one is on, every off DDP light's pixels that no on light covers get black, so they are held black. What
+        the sender holds does not count as covered: a light handed back to an overlapping one leaves its last frame
+        in the held range, and that is blacked too. The off lights' pixels are merged into runs first, one black
+        frame per run (pixel lights would otherwise send one each); a run the sender already holds black (its shadow
+        bytes, ``stats.last_frame``) is skipped. A ``ddp`` light's pixels count as covered even before its runner's
+        first frame, so they never get black. Raises ``DDPError``.
         """
         if not self.ddp_driving:
             self.sender.release(drain=True)  # the last frame (black) still goes out as a burst; keepalive stops now
             return
-        channels = self.sender.strip.channels
-        held = [Segment(_HELD, offset // channels, length // channels) for offset, length in self.sender.held]
         lights = self.segment_lights
-        covered = sorted([*held, *(light.segment for light in lights if light.source is LightSource.DDP)], key=_start)
-        for light in lights:
-            if light.source is LightSource.DDP:
-                continue
-            for start, end in _uncovered(light.segment, covered):
-                await self.sender.off(Segment(_HELD, start, end - start))
-            insort(covered, light.segment, key=_start)
+        on = sorted((light.segment for light in lights if light.source is LightSource.DDP), key=_start)
+        strip, shadow = self.sender.strip, self.sender.stats.last_frame
+        for run_start, run_end in _runs([light.segment for light in lights if light.source is not LightSource.DDP]):
+            for start, end in _uncovered(Segment(_HELD, run_start, run_end - run_start), on):
+                run = Segment(_HELD, start, end - start)
+                offset = strip.byte_offset(run)
+                if self.sent(run) and not any(shadow[offset : offset + strip.byte_length(run)]):
+                    continue  # already held black
+                await self.sender.off(run)
 
     def sent(self, segment: Segment) -> bool:
         """The sender holds every pixel of ``segment``: a frame reached them (and keepalive resends it)."""
@@ -168,6 +169,17 @@ type DDPConfigEntry = ConfigEntry[DDPRuntime]
 
 def _start(segment: Segment) -> int:
     return segment.start
+
+
+def _runs(segments: list[Segment]) -> list[tuple[int, int]]:
+    """The ``(start, end)`` pixel runs ``segments`` cover together: overlapping or adjacent ones merged, sorted."""
+    runs: list[tuple[int, int]] = []
+    for segment in sorted(segments, key=_start):
+        if runs and segment.start <= runs[-1][1]:
+            runs[-1] = (runs[-1][0], max(runs[-1][1], segment.end))
+        else:
+            runs.append((segment.start, segment.end))
+    return runs
 
 
 def _uncovered(segment: Segment, cover: list[Segment]) -> list[tuple[int, int]]:
